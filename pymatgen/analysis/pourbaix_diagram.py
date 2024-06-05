@@ -309,6 +309,130 @@ class OxygenPourbaixEntry(PourbaixEntry):
         """A pretty string representation."""
         return self.name
 
+
+class SurfacePourbaixEntry(PourbaixEntry):
+    """
+    Energy of each entry is the surface free energy determined with respect to the reference species
+    (most stable species in the Pourbaix diagram) at each pH and V. The surface energy is
+    calculated using a two-step surface-solvent dissociation-solvation process.
+
+    Step 1: Surface is dissociated into constituent atoms in their standard states.
+    Step 2: The atoms are solvated in the solvent to form the most stable species.
+
+    Surface free energy is calculated as -(E_step_1 + E_step_2), where -E_step_1 can be interpreted
+    as the formation energy. E_step_2 is the solvation energy of the atoms in the solvent.
+    """
+
+    def __init__(
+        self,
+        surface_entry: ComputedEntry,
+        reference_entries: dict[str, PourbaixEntry],
+        entry_id: Optional[float] = None,
+        concentration: float = 1e-6,
+    ):
+        """
+        Args:
+            surface_entry (ComputedEntry): Surface entry
+            reference_entries (dict[str, PourbaixEntry]): Reference entries
+            entry_id (float): Entry ID
+            concentration (float): Concentration of surface entry species
+        """
+        super().__init__(surface_entry, entry_id, concentration)
+        self.surface_entry = surface_entry  # energy must be formation energy
+        self.reference_entries = reference_entries
+        if not all(isinstance(entry, PourbaixEntry) for entry in self.reference_entries.values()):
+            raise ValueError("All reference entries must be PourbaixEntry objects")
+        if not any(entry.name == "H2O(l)" for entry in self.reference_entries.values()):
+            raise ValueError("H2O must be included in reference entries")
+
+    @property
+    def npH(self):
+        """The number of H by counting the number of atoms over reference entries"""
+        return -sum(
+            self.entry.composition.get(element) * self.reference_entries[element.symbol].normalized_npH
+            for element in self.entry.composition.elements
+        )
+
+    @property
+    def nPhi(self):
+        """The number of electrons by counting the number of atoms over reference entries"""
+        return -sum(
+            self.entry.composition.get(element) * self.reference_entries[element.symbol].normalized_nPhi
+            for element in self.entry.composition.elements
+        )
+
+    @property
+    def nH2O(self):
+        """The number of H2O by counting the number of atoms over reference entries"""
+        return -sum(
+            self.entry.composition.get(element) * self.reference_entries[element.symbol].normalized_nH2O
+            for element in self.entry.composition.elements
+        )
+
+    @property
+    def energy_delta_G1(self):
+        """The energy in the first step of the dissociation-solvation reaction. Expressed as the 
+        negative of the formation energy of the surface entry."""
+        return -self.entry.energy
+
+    @property
+    def energy_delta_G2(self):
+        """Total free energy change for the second step of the dissociation-solvation reaction."""
+        return sum(
+            self.entry.composition.get(element) * self.reference_entries[element.symbol].normalized_energy
+            for element in self.entry.composition.elements
+        )
+
+    @property
+    def energy(self):
+        """Total energy of the Pourbaix entry (at pH, V = 0 vs. SHE)."""
+        return -(self.energy_delta_G1 + self.energy_delta_G2)
+
+    @property
+    def energy_per_atom(self):
+        """Energy per atom of the Pourbaix entry."""
+        return self.energy / self.composition.num_atoms
+
+    @property
+    def elements(self):
+        """Elements in the entry."""
+        return self.entry.elements
+
+    def as_dict(self):
+        """Get dict which contains Surface Pourbaix Entry data.
+        Note that the pH, voltage, H2O factors are always calculated when
+        constructing a SurfacePourbaixEntry object.
+        """
+        dct = {"@module": type(self).__module__, "@class": type(self).__name__}
+        if isinstance(self.entry, IonEntry):
+            dct["entry_type"] = "Ion"
+        else:
+            dct["entry_type"] = "Solid"
+        dct["entry"] = self.entry.as_dict()
+        dct["reference_entries"] = {k: v.as_dict() for k, v in self.reference_entries.items()}
+        dct["concentration"] = self.concentration
+        dct["entry_id"] = self.entry_id
+        return dct
+
+    @classmethod
+    def from_dict(cls, dct: dict) -> Self:
+        """Invokes a SurfacePourbaixEntry from a dictionary."""
+        entry_type = dct["entry_type"]
+        surface_entry = (
+            IonEntry.from_dict(dct["entry"]) if entry_type == "Ion" else MontyDecoder().process_decoded(dct["entry"])
+        )
+        reference_entries = {k: MontyDecoder().process_decoded(v) for k, v in dct["reference_entries"].items()}
+        entry_id = dct["entry_id"]
+        concentration = dct["concentration"]
+        return cls(surface_entry, reference_entries, entry_id, concentration)
+
+    # @property
+    # def normalization_factor(self):
+    #     # TODO think about whether we should have an primary element, e.g. Ir in SrIrO3
+    #     """Sum of number of atoms minus the number of H and O in composition."""
+    #     return 1.0 / (self.num_atoms - self.composition.get("H", 0) - self.composition.get("O", 0))
+
+
 class MultiEntry(PourbaixEntry):
     """
     PourbaixEntry-like object for constructing multi-elemental Pourbaix diagrams.
