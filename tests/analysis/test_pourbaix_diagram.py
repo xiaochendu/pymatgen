@@ -100,6 +100,54 @@ class TestPourbaixEntry(PymatgenTest):
         assert pb_entry.get_element_fraction("Mn") == approx(0.4)
 
 
+class TestOxygenPourbaixEntry(PymatgenTest):
+    def setUp(self):
+        self.entry = ComputedEntry("H8O4", -9.8332)
+        self.pbx_entry = OxygenPourbaixEntry(self.entry)
+
+    def test_pourbaix_entry(self):
+        assert self.pbx_entry.entry.energy == approx(-9.8332), "Wrong Energy!"
+        assert self.pbx_entry.entry.name == "H2O", "Wrong Entry!"
+
+    def test_calc_coeff_terms(self):
+        assert self.pbx_entry.npH == 8.0, "Wrong npH!"
+        assert self.pbx_entry.nPhi == 8.0, "Wrong nPhi!"
+        assert self.pbx_entry.nH2O == 0.0, "Wrong nH2O!"
+
+        # normalized values
+        assert self.pbx_entry.normalized_npH == 2.0, "Wrong normalized npH!"
+        assert self.pbx_entry.normalized_nPhi == 2.0, "Wrong normalized nPhi!"
+        assert self.pbx_entry.normalized_nH2O == 0.0, "Wrong normalized nH2O!"
+        assert self.pbx_entry.normalized_energy == approx(-2.4582998575), "Wrong normalized Energy!"
+
+    def test_as_from_dict(self):
+        dct = self.pbx_entry.as_dict()
+        liq_entry = self.pbx_entry.from_dict(dct)
+        assert liq_entry.name == "H2O(l)", "Wrong Entry!"
+        assert liq_entry.energy == self.pbx_entry.energy, "as_dict and from_dict energies unequal"
+
+        # Ensure computed entry data persists
+        entry = ComputedEntry("O2", energy=-20, data={"test": "test"})
+        pbx_entry = OxygenPourbaixEntry(entry=entry)
+        dumpfn(pbx_entry, "pbx_entry.json")
+        reloaded = loadfn("pbx_entry.json")
+        assert isinstance(reloaded.entry, ComputedEntry)
+        assert reloaded.entry.data is not None
+
+    def test_energy_functions(self):
+        assert self.pbx_entry.energy_at_conditions(10, 0) == approx(-5.10519943), "Wrong energy at pH = 10 and V = 0!"
+        assert self.pbx_entry.energy_at_conditions(np.array([1, 2, 3]), 0) == approx(
+            [-9.36, -8.888, -8.415], abs=1e-3
+        ), "Wrong energy at pH = [1, 2, 3] and V = 0!"
+        assert self.pbx_entry.energy_at_conditions(10, np.array([1, 2, 3])) == approx(
+            [2.895, 10.895, 18.895], abs=1e-3
+        ), "Wrong energy at pH = 10 and V = [1, 2, 3]!"
+        assert self.pbx_entry.energy_at_conditions(np.array([1, 2, 3]), np.array([1, 2, 3])) == approx(
+            [-1.36, 7.112, 15.585],
+            abs=1e-3,
+        ), "Wrong energy at pH = [1, 2, 3] and V = [1, 2, 3]!"
+
+
 class TestPourbaixDiagram(TestCase):
     @classmethod
     def setUpClass(cls):
