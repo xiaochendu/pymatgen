@@ -76,7 +76,7 @@ class PourbaixEntry(MSONable, Stringify):
     An object encompassing all data relevant to a solid or ion
     in a Pourbaix diagram. Each bulk solid/ion has an energy
     g of the form: e = e0 + 0.0591 log10(conc) - nO mu_H2O
-    + (nH - 2nO) pH + phi (-nH + 2nO + q).
+    + (nH - 2nO) pH + phi (nH - 2nO - q).
 
     Note that the energies corresponding to the input entries
     should be formation energies with respect to hydrogen and
