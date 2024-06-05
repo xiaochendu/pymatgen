@@ -12,7 +12,7 @@ import warnings
 from copy import deepcopy
 from functools import cmp_to_key, partial
 from multiprocessing import Pool
-from typing import TYPE_CHECKING, no_type_check
+from typing import TYPE_CHECKING, Dict, Iterable, List, Optional, Tuple, Union, no_type_check
 
 import numpy as np
 from monty.json import MontyDecoder, MSONable
@@ -63,6 +63,8 @@ due.cite(
 logger = logging.getLogger(__name__)
 
 PREFAC = 0.0591
+ELEMENTS_HO = {Element("H"), Element("O")}
+SYMBOLS_HO = {elt.symbol for elt in ELEMENTS_HO}
 
 
 # TODO: Revise to more closely reflect PDEntry, invoke from energy/composition
@@ -123,14 +125,6 @@ class PourbaixEntry(MSONable, Stringify):
         return self.npH - self.charge
 
     @property
-    def name(self):
-        """The entry's name."""
-        if self.phase_type == "Solid":
-            return f"{self.entry.reduced_formula}(s)"
-
-        return self.entry.name
-
-    @property
     def energy(self):
         """Total energy of the Pourbaix entry (at pH, V = 0 vs. SHE)."""
         # Note: this implicitly depends on formation energies as input
@@ -140,6 +134,30 @@ class PourbaixEntry(MSONable, Stringify):
     def energy_per_atom(self):
         """Energy per atom of the Pourbaix entry."""
         return self.energy / self.composition.num_atoms
+
+    def __getattr__(self, attr):
+        """Get attributed normalized by number of non H or O atoms, e.g.
+        for Zn2O6, energy / 2 or for AgTe3(OH)3, energy / 4."""
+        # supported normalized attributes
+        if attr in (
+            "normalized_npH",
+            "normalized_nPhi",
+            "normalized_nH2O",
+            "normalized_energy",
+        ):
+            attr = attr.replace("normalized_", "")
+            return self.__getattribute__(attr) * self.normalization_factor
+
+        # default other attributed
+        return self.__getattribute__(attr)
+
+    @property
+    def name(self):
+        """The entry's name."""
+        if self.phase_type == "Solid":
+            return f"{self.entry.reduced_formula}(s)"
+
+        return self.entry.name
 
     @property
     def elements(self):
@@ -169,13 +187,6 @@ class PourbaixEntry(MSONable, Stringify):
             fraction of element / sum(all non-OH elements)
         """
         return self.composition.get(element) * self.normalization_factor
-
-    @property
-    def normalized_energy(self):
-        """Energy normalized by number of non H or O atoms, e.g.
-        for Zn2O6, energy / 2 or for AgTe3(OH)3, energy / 4.
-        """
-        return self.energy * self.normalization_factor
 
     def normalized_energy_at_conditions(self, pH, V):
         """Energy at an electrochemical condition, compatible with
