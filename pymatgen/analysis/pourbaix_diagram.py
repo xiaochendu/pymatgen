@@ -265,6 +265,50 @@ class PourbaixEntry(MSONable, Stringify):
         )
 
 
+class OxygenPourbaixEntry(PourbaixEntry):
+    """Pourbaix entry for oxygen. This is a special case because we count the number of O
+    in composition for the normalized energy and disregard it for npH and nH2O."""
+
+    def __init__(self, entry: ComputedEntry, entry_id: Optional[str] = None, concentration: float = 1e-6):
+        super().__init__(entry, entry_id, concentration)
+        self.phase_type = "Liquid"
+
+    @property
+    def npH(self):
+        """The number of H."""
+        return self.entry.composition.get("H", 0)
+
+    @property
+    def nH2O(self):
+        """The number of H2O."""
+        return 0  # all O atoms are counted as O
+
+    @property
+    def normalization_factor(self):
+        """Sum of number of atoms minus the number of H in composition."""
+        return 1.0 / (self.num_atoms - self.composition.get("H", 0))
+
+    @property
+    def name(self):
+        """The entry's name."""
+        if self.phase_type == "Liquid":
+            return f"{self.entry.reduced_formula}(l)"
+
+        return self.entry.name
+
+    def as_dict(self):
+        """Get dict which contains Oxygen Pourbaix Entry data."""
+        dct = {"@module": type(self).__module__, "@class": type(self).__name__}
+        dct["entry_type"] = "Liquid"
+        dct["entry"] = self.entry.as_dict()
+        dct["concentration"] = self.concentration
+        dct["entry_id"] = self.entry_id
+        return dct
+
+    def to_pretty_string(self) -> str:
+        """A pretty string representation."""
+        return self.name
+
 class MultiEntry(PourbaixEntry):
     """
     PourbaixEntry-like object for constructing multi-elemental Pourbaix diagrams.
