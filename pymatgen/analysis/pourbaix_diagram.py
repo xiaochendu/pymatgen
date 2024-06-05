@@ -910,8 +910,7 @@ class PourbaixDiagram(MSONable):
         hyperplanes = np.array(hyperplanes)
         hyperplanes[:, 2] = 1
 
-        max_contribs = np.max(np.abs(hyperplanes), axis=0)
-        g_max = np.dot(-max_contribs, [limits[0][1], limits[1][1], 0, 1])
+        g_max = PourbaixDiagram.get_min_energy(limits, hyperplanes)
 
         # Add border hyperplanes and generate HalfspaceIntersection
         border_hyperplanes = [
@@ -953,8 +952,22 @@ class PourbaixDiagram(MSONable):
             simplices = [Simplex(points[indices]) for indices in ConvexHull(points).simplices]
             pourbaix_domains[entry] = simplices
             pourbaix_domain_vertices[entry] = points
-
         return pourbaix_domains, pourbaix_domain_vertices
+
+    @staticmethod
+    def get_min_energy(limits, hyperplanes):
+        """Get the lower bound energy for the Pourbaix diagram.
+
+        Args:
+            limits ([[float]]): limits of pH and V for the Pourbaix diagram
+            hyperplanes (np.array): hyperplanes corresponding to
+                the Pourbaix entries
+
+        Returns:
+            float: lower bound energy for the Pourbaix diagram
+        """
+        max_contribs = np.max(np.abs(hyperplanes), axis=0)
+        return np.dot(-max_contribs, [limits[0][1], limits[1][1], 0, 1])
 
     def find_stable_entry(self, pH, V):
         """Find stable entry at a pH,V condition
@@ -966,8 +979,7 @@ class PourbaixDiagram(MSONable):
         Returns:
             PourbaixEntry: stable entry at pH, V
         """
-        energies_at_conditions = [entry.normalized_energy_at_conditions(pH, V) for entry in self.stable_entries]
-        return self.stable_entries[np.argmin(energies_at_conditions)]
+        return self.get_stable_entry(pH, V) # alias
 
     def get_decomposition_energy(self, entry, pH, V):
         """Find decomposition to most stable entries in eV/atom,
@@ -1032,10 +1044,25 @@ class PourbaixDiagram(MSONable):
         """The stable entries in the Pourbaix diagram."""
         return list(self._stable_domains)
 
+    @stable_entries.setter
+    def stable_entries(self, entries):
+        """Set the stable entries in the Pourbaix diagram."""
+        self._stable_domains = entries
+
     @property
     def unstable_entries(self):
         """All unstable entries in the Pourbaix diagram."""
         return [entry for entry in self.all_entries if entry not in self.stable_entries]
+
+    @property
+    def stable_vertices(self):
+        """Vertices corresponding to each stable Pourbaix entries."""
+        return self._stable_domain_vertices
+
+    @stable_vertices.setter
+    def stable_vertices(self, vertices):
+        """Set the stable vertices in the Pourbaix diagram."""
+        self._stable_domain_vertices = vertices
 
     @property
     def all_entries(self):
