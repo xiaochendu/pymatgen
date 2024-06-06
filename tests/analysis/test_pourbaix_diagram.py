@@ -9,15 +9,27 @@ import numpy as np
 from monty.serialization import dumpfn, loadfn
 from pytest import approx
 
-from pymatgen.analysis.pourbaix_diagram import IonEntry, MultiEntry, PourbaixDiagram, PourbaixEntry, PourbaixPlotter
+from pymatgen.analysis.pourbaix_diagram import (
+    IonEntry,
+    MultiEntry,
+    OxygenPourbaixEntry,
+    PourbaixDiagram,
+    PourbaixEntry,
+    PourbaixPlotter,
+    SurfacePourbaixDiagram,
+    SurfacePourbaixEntry,
+)
 from pymatgen.core.composition import Composition
 from pymatgen.core.ion import Ion
 from pymatgen.entries.computed_entries import ComputedEntry
 from pymatgen.util.testing import TEST_FILES_DIR, PymatgenTest
 
+np.set_printoptions(precision=5, suppress=True)
+
 TEST_DIR = f"{TEST_FILES_DIR}/analysis/pourbaix_diagram"
 
 logger = logging.getLogger(__name__)
+logger.setLevel(logging.INFO)
 
 
 class TestPourbaixEntry(PymatgenTest):
@@ -144,6 +156,82 @@ class TestOxygenPourbaixEntry(PymatgenTest):
         ), "Wrong energy at pH = 10 and V = [1, 2, 3]!"
         assert self.pbx_entry.energy_at_conditions(np.array([1, 2, 3]), np.array([1, 2, 3])) == approx(
             [-1.36, 7.112, 15.585],
+            abs=1e-3,
+        ), "Wrong energy at pH = [1, 2, 3] and V = [1, 2, 3]!"
+
+
+class TestSurfacePourbaixEntry(PymatgenTest):
+    def setUp(self):
+        self.entry = ComputedEntry("Sr16 Ir16 O48", -133.3124)  # formation energy
+        self.reference_entries = {
+            "O": OxygenPourbaixEntry(ComputedEntry("H8O4", -9.8332)),
+            "Sr": PourbaixEntry(
+                IonEntry.from_dict({"ion": {"Sr": 1.0, "charge": 2.0}, "energy": -5.798066, "name": "Sr[+2]"})
+            ),
+            "Ir": PourbaixEntry(ComputedEntry("Ir2 O4", -6.2984)),
+        }
+        self.pbx_entry = SurfacePourbaixEntry(self.entry, self.reference_entries)
+
+    def test_pourbaix_entry(self):
+        assert self.pbx_entry.entry.energy == approx(-133.3124), "Wrong Energy!"
+        assert self.pbx_entry.entry.name == "SrIrO3", "Wrong Entry!"
+        assert self.pbx_entry.reference_entries["O"].entry.energy == approx(-9.8332), "Wrong Energy!"
+        assert self.pbx_entry.reference_entries["O"].entry.name == "H2O", "Wrong Entry!"
+        assert self.pbx_entry.reference_entries["Sr"].entry.energy == approx(-5.798066), "Wrong Energy!"
+        assert self.pbx_entry.reference_entries["Sr"].entry.name == "Sr[+2]", "Wrong Entry!"
+        assert self.pbx_entry.reference_entries["Ir"].entry.energy == approx(-6.2984), "Wrong Energy!"
+        assert self.pbx_entry.reference_entries["Ir"].entry.name == "IrO2", "Wrong Entry!"
+
+    def test_calc_coeff_terms(self):
+        assert self.pbx_entry.npH == -32.0, "Wrong npH!"
+        assert self.pbx_entry.nPhi == 0.0, "Wrong nPhi!"
+        assert self.pbx_entry.nH2O == -32.0, "Wrong nH2O!"
+        assert self.pbx_entry.energy == approx(54.85056, rel=1e-3), "Wrong Energy!"
+
+        # normalized values
+        assert self.pbx_entry.normalized_npH == -1.0, "Wrong normalized npH!"
+        assert self.pbx_entry.normalized_nPhi == 0.0, "Wrong normalized nPhi!"
+        assert self.pbx_entry.normalized_nH2O == -1.0, "Wrong normalized nH2O!"
+        assert self.pbx_entry.normalized_energy == approx(1.71408, rel=1e-3), "Wrong normalized Energy!"
+
+    def test_as_from_dict(self):
+        dct = self.pbx_entry.as_dict()
+        loaded_entry = self.pbx_entry.from_dict(dct)
+        assert loaded_entry.name == self.pbx_entry.name, "Wrong Entry!"
+        assert loaded_entry.energy == self.pbx_entry.energy, "as_dict and from_dict energies unequal"
+        assert set(loaded_entry.reference_entries.keys()) == set(self.reference_entries.keys())
+
+        # Ensure reference entries are loaded correctly
+        assert loaded_entry.entry.energy == approx(self.pbx_entry.entry.energy), "Wrong Energy!"
+        assert loaded_entry.entry.name == self.pbx_entry.entry.name, "Wrong Entry!"
+        for key in self.reference_entries.keys():
+            assert loaded_entry.reference_entries[key].entry.energy == approx(
+                self.reference_entries[key].entry.energy
+            ), f"Wrong Energy for {key}!"
+            assert (
+                loaded_entry.reference_entries[key].entry.name == self.reference_entries[key].entry.name
+            ), f"Wrong Entry for {key}!"
+
+        # Ensure computed entry data persists
+        entry = ComputedEntry("SrIrO3", energy=-20, data={"test": "test"})
+        pbx_entry = SurfacePourbaixEntry(entry, self.reference_entries)
+        dumpfn(pbx_entry, "surf_pbx_entry.json")
+        reloaded = loadfn("surf_pbx_entry.json")
+        assert isinstance(reloaded.entry, ComputedEntry)
+        assert reloaded.entry.data is not None
+
+    def test_energy_functions(self):
+        assert self.pbx_entry.energy_at_conditions(10, 0) == approx(
+            35.93856, rel=1e-3
+        ), "Wrong energy at pH = 10 and V = 0!"
+        assert self.pbx_entry.energy_at_conditions(np.array([1, 2, 3]), 0) == approx(
+            [52.959, 51.068, 49.177], abs=1e-3
+        ), "Wrong energy at pH = [1, 2, 3] and V = 0!"
+        assert self.pbx_entry.energy_at_conditions(10, np.array([1, 2, 3])) == approx(
+            [35.939, 35.939, 35.939], abs=1e-3
+        ), "Wrong energy at pH = 10 and V = [1, 2, 3]!"
+        assert self.pbx_entry.energy_at_conditions(np.array([1, 2, 3]), np.array([1, 2, 3])) == approx(
+            [52.959, 51.068, 49.177],
             abs=1e-3,
         ), "Wrong energy at pH = [1, 2, 3] and V = [1, 2, 3]!"
 
