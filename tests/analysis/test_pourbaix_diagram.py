@@ -426,6 +426,176 @@ class TestPourbaixDiagram(TestCase):
         assert len(pd_binary.stable_entries) == len(new_binary.stable_entries)
 
 
+class TestSurfacePourbaixDiagram(TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.test_data = loadfn(f"{TEST_DIR}/surface_pourbaix_test_data.json")
+        cls.pbx = cls.test_data["reference_pourbaix_diagram"]
+        pH_limits = [0, 4]
+        phi_limits = [0, 1]  # limit to 2 domains for now
+        cls.pbx.stable_entries, cls.pbx.stable_vertices = cls.pbx.get_pourbaix_domains(
+            cls.pbx.all_entries, [pH_limits, phi_limits]
+        )
+
+        cls.surf_pbx = SurfacePourbaixDiagram(cls.test_data["surface_entries"], cls.pbx)
+        cls.surf_pbx_wo_elems = SurfacePourbaixDiagram(
+            cls.test_data["surface_entries"], cls.pbx, reference_elements=("O", "Ir", "Sr")
+        )
+
+    @staticmethod
+    def domain_formulae(domain) -> list[str]:
+        return [entry.composition.formula for entry in domain.entry_list]
+
+    def test_ref_elems(self):
+        # make sure it works for both specified and unspecified reference elements
+        assert set(self.surf_pbx_wo_elems.ref_elems) == set(
+            ["O", "Ir", "Sr"]
+        ), "Reference elements not inferred correctly"
+        assert set(self.surf_pbx.ref_elems) == set(["O", "Ir", "Sr"]), "Reference elements not explicitly set correctly"
+
+    # TODO: make the tests more rigorous
+    def test_ind_surface_pbx_entries(self):
+        # Test that the surface pourbaix entries are correctly initialized
+        assert len(self.surf_pbx.ind_surface_pbx_entries.values()) == 2
+
+        for domain, surface_entries in self.surf_pbx.ind_surface_pbx_entries.items():
+            assert isinstance(domain, MultiEntry), "Domain is not a Pourbaix MultiEntry"
+            assert len(surface_entries) == 3, "Incorrect number of surface entries"
+
+            for entry in surface_entries:
+                assert isinstance(entry, SurfacePourbaixEntry), "Entry is not a SurfacePourbaixEntry"
+                assert isinstance(entry.entry, ComputedEntry), "Entry is not a ComputedEntry"
+                assert isinstance(entry.reference_entries, dict), "Reference entries are not a dictionary"
+                assert all(
+                    isinstance(ref_entry, PourbaixEntry) for ref_entry in entry.reference_entries.values()
+                ), "Reference entries are not PourbaixEntries"
+                assert len(entry.reference_entries) == 3, "Incorrect number of reference entries"
+                assert set(entry.reference_entries.keys()) == set(["O", "Ir", "Sr"]), "Incorrect reference elements"
+
+                if set(TestSurfacePourbaixDiagram.domain_formulae(domain)) == set(["Sr1", "Ir1"]):
+                    # Test SurfacePourbaixEntries are correct
+                    if entry.composition.formula == "Sr16 Ir16 O48":
+                        assert entry.npH == -96.0, "Wrong npH!"
+                        assert entry.nPhi == -64.0, "Wrong nPhi!"
+                        assert entry.nH2O == 0.0, "Wrong nH2O!"
+                        assert entry.energy == approx(83.12870, rel=1e-3), "Wrong Energy!"
+
+                    if entry.composition.formula == "Sr8 Ir16 O40":
+                        assert entry.npH == -80.0, "Wrong npH!"
+                        assert entry.nPhi == -64.0, "Wrong nPhi!"
+                        assert entry.nH2O == 0.0, "Wrong nH2O!"
+                        assert entry.energy == approx(67.43366, rel=1e-3), "Wrong Energy!"
+
+                    if entry.composition.formula == "Ir16 O32":
+                        assert entry.npH == -64.0, "Wrong npH!"
+                        assert entry.nPhi == -64.0, "Wrong nPhi!"
+                        assert entry.nH2O == 0.0, "Wrong nH2O!"
+                        assert entry.energy == approx(48.71359, rel=1e-3), "Wrong Energy!"
+                else:
+                    if entry.composition.formula == "Sr16 Ir16 O48":
+                        assert entry.npH == -32.0, "Wrong npH!"
+                        assert entry.nPhi == 0.0, "Wrong nPhi!"
+                        assert entry.nH2O == -32.0, "Wrong nH2O!"
+                        assert entry.energy == approx(54.85056, rel=1e-3), "Wrong Energy!"
+
+                    if entry.composition.formula == "Sr8 Ir16 O40":
+                        assert entry.npH == -16.0, "Wrong npH!"
+                        assert entry.nPhi == 0.0, "Wrong nPhi!"
+                        assert entry.nH2O == -32.0, "Wrong nH2O!"
+                        assert entry.energy == approx(39.15552, rel=1e-3), "Wrong Energy!"
+
+                    if entry.composition.formula == "Ir16 O32":
+                        assert entry.npH == 0.0, "Wrong npH!"
+                        assert entry.nPhi == 0.0, "Wrong nPhi!"
+                        assert entry.nH2O == -32.0, "Wrong nH2O!"
+                        assert entry.energy == approx(20.43545, rel=1e-3), "Wrong Energy!"
+
+    def test_ind_hyperplanes(self):
+        # Test that the surface pourbaix hyperplanes are correctly initialized
+        assert len(self.surf_pbx.ind_hyperplanes) == 2
+
+        for domain, hyperplane_info in self.surf_pbx.ind_hyperplanes.items():
+            assert isinstance(domain, MultiEntry), "Domain is not a Pourbaix MultiEntry"
+            assert hyperplane_info["hyperplanes"].shape == (8, 4), "Incorrect dimensions of hyperplanes"
+            if set(TestSurfacePourbaixDiagram.domain_formulae(domain)) == set(["Sr1", "Ir1"]):
+                # check each row is in the list, not necessarily in order
+                for hyperplane in hyperplane_info["hyperplanes"]:
+                    assert np.any(
+                        np.allclose(hyperplane, row, rtol=1e-3, atol=1e-3)
+                        for row in [
+                            [5.6736, 64.0, 1.0, -83.1287],
+                            [4.728, 64.0, 1.0, -67.43366],
+                            [3.7824, 64.0, 1.0, -48.71359],
+                            [0.059, 0.99826, 0.0, -0.44108],
+                            [1.0, 0.0, 0.0, -4.0],
+                            [-1.0, -0.0, 0.0, -0.0],
+                            [0.0, -1.0, 0.0, 0.0],
+                            [0.0, 0.0, -1.0, -268.20246],
+                        ]
+                    ), "Incorrect hyperplane"
+
+                assert hyperplane_info["interior_point"] == approx(
+                    [2.0, 0.22092, -134.10123], rel=1e-2
+                ), "Incorrect interior point"
+            else:
+                # check each row is in the list, not necessarily in order
+                for hyperplane in hyperplane_info["hyperplanes"]:
+                    assert np.any(
+                        np.allclose(hyperplane, row, rtol=1e-3, atol=1e-3)
+                        for row in [
+                            [1.8912, 0.0, 1.0, -54.85056],
+                            [0.9456, 0.0, 1.0, -39.15552],
+                            [0.0, 0.0, 1.0, -20.43545],
+                            [-0.059, -0.99826, 0.0, 0.44108],
+                            [1.0, -0.0, 0.0, -4.0],
+                            [-1.0, 0.0, 0.0, -0.0],
+                            [-0.0, 1.0, 0.0, -1.0],
+                            [0.0, 0.0, -1.0, -124.83072],
+                        ]
+                    ), "Incorrect hyperplane"
+
+                assert hyperplane_info["interior_point"] == approx(
+                    [2.0, 0.60272, -62.41536], rel=1e-2
+                ), "Incorrect interior point"
+
+    def test_ind_stable_domain_vertices(self):
+        # Test that the surface pourbaix domains are correctly initialized
+        assert len(self.surf_pbx.ind_stable_domain_vertices) == 2
+
+        for domain, stable_domains in self.surf_pbx.ind_stable_domain_vertices.items():
+            assert isinstance(domain, MultiEntry), "Domain is not a Pourbaix MultiEntry"
+            assert len(stable_domains) == 1, "Incorrect number of stable domains"
+            if set(TestSurfacePourbaixDiagram.domain_formulae(domain)) == set(["Sr1", "Ir1"]):
+                for vertices in stable_domains.values():
+                    assert np.allclose(
+                        vertices, [[0.0, 0.44185], [4.0, 0.20545], [4.0, -0.0], [-0.0, 0.0]], rtol=1e-3, atol=1e-3
+                    )
+            else:
+                for vertices in stable_domains.values():
+                    assert np.allclose(
+                        vertices, [[4.0, 0.20545], [-0.0, 0.44185], [-0.0, 1.0], [4.0, 1.0]], rtol=1e-3, atol=1e-3
+                    )
+
+    def test_final_stable_domain_vertices(self):
+        # Test that the final stable domain vertices are correctly initialized
+        assert len(self.surf_pbx.stable_vertices) == 1
+
+        # Only one domain in this case
+        for domain, vertices in self.surf_pbx.stable_vertices.items():
+            assert isinstance(domain, PourbaixEntry), "Domain is not a PourbaixEntry"
+            # check each row is in the list, not necessarily in order
+            for vertex in vertices:
+                assert np.any(
+                    np.allclose(vertex, row, rtol=1e-3, atol=1e-3)
+                    for row in [
+                        [0.0, 0.44185],
+                        [4.0, 0.20545],
+                        [4.0, -0.0],
+                        [-0.0, 0.0],
+                    ]
+                ), "Incorrect vertex"
+
+
 class TestPourbaixPlotter(TestCase):
     def setUp(self):
         self.test_data = loadfn(f"{TEST_DIR}/pourbaix_test_data.json")
