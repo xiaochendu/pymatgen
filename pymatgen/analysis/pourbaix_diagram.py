@@ -372,7 +372,7 @@ class SurfacePourbaixEntry(PourbaixEntry):
 
     @property
     def energy_delta_G1(self):
-        """The energy in the first step of the dissociation-solvation reaction. Expressed as the 
+        """The energy in the first step of the dissociation-solvation reaction. Expressed as the
         negative of the formation energy of the surface entry."""
         return -self.entry.energy
 
@@ -557,9 +557,6 @@ def ion_or_solid_comp_object(formula):
     else:
         comp_obj = Composition(formula)
     return comp_obj
-
-
-ELEMENTS_HO = {Element("H"), Element("O")}
 
 
 # TODO: the solids filter breaks some of the functionality of the
@@ -968,7 +965,7 @@ class PourbaixDiagram(MSONable):
             float: lower bound energy for the Pourbaix diagram
         """
         max_contribs = np.max(np.abs(hyperplanes), axis=0)
-        return np.dot(-max_contribs, [limits[0][1], limits[1][1], 0, 1])
+        return np.dot(-max_contribs, [*np.max(np.abs(limits), axis=1).tolist(), 0, 1])
 
     def find_stable_entry(self, pH, V):
         """Find stable entry at a pH,V condition
@@ -980,7 +977,7 @@ class PourbaixDiagram(MSONable):
         Returns:
             PourbaixEntry: stable entry at pH, V
         """
-        return self.get_stable_entry(pH, V) # alias
+        return self.get_stable_entry(pH, V)  # alias
 
     def get_decomposition_energy(self, entry, pH, V):
         """Find decomposition to most stable entries in eV/atom,
