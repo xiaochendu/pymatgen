@@ -9,6 +9,7 @@ import itertools
 import logging
 import re
 import warnings
+from collections import defaultdict
 from copy import deepcopy
 from functools import cmp_to_key, partial
 from multiprocessing import Pool
@@ -1100,6 +1101,325 @@ class PourbaixDiagram(MSONable):
             comp_dict=dct.get("comp_dict"),
             conc_dict=dct.get("conc_dict"),
             filter_solids=bool(dct.get("filter_solids")),
+        )
+
+
+class SurfacePourbaixDiagram(MSONable):
+    """Create a Pourbaix diagram from surface energies. Energies are calculated as the formation energy from stable
+    species at each pH and V.
+
+    Refer to SurfacePourbaixEntry for more information on the construction of surface Pourbaix entries.
+    """
+
+    def __init__(
+        self,
+        surface_entries: Iterable[ComputedEntry],
+        reference_pourbaix_diagram: PourbaixDiagram,
+        reference_elements: Optional[Iterable[str]] = None,
+    ) -> None:
+        self.surface_entries = surface_entries  # with surface formation energies
+        self.ref_pbx = reference_pourbaix_diagram
+        self.ref_elems = reference_elements or self.get_ref_elems()
+
+        # Step 1: create SurfacePourbaixEntry's for each region
+        self.ind_surface_pbx_entries = self.construct_surf_pbx_entries()
+
+        # Step 2: construct individual hyperplanes for each region
+        self.ind_hyperplanes = self.construct_hyperplanes()
+
+        # Step 3: construct Pourbaix domains for each region
+        self.ind_stable_domains, self.ind_stable_domain_vertices = self.construct_pourbaix_domains()
+
+        # Step 4: construct overall Pourbaix domains
+        # styling compatible with PourbaixDiagram class
+        self._stable_domains, self._stable_domain_vertices = self.merge_pourbaix_domains()
+
+    @property
+    def H2O_pourbaix_entry(self) -> OxygenPourbaixEntry:
+        """Pourbaix entry for H2O.
+
+        Returns:
+            Pourbaix entry for H2O.
+        """
+        return OxygenPourbaixEntry(ComputedEntry("H8O4", -9.83319943))
+
+    @property
+    def stable_entries(self) -> list[PourbaixEntry]:
+        """The stable entries in the surface Pourbaix diagram.
+
+        Returns:
+            list of Pourbaix entries each corresponding to a stable domain.
+        """
+        return list(self._stable_domains)
+
+    @stable_entries.setter
+    def stable_entries(self, entries: dict[PourbaixEntry, Simplex]) -> None:
+        """Set the stable entries in the surface Pourbaix diagram.
+
+        Args:
+            entries: dictionary of stable Pourbaix entries and their corresponding simplices.
+        """
+        self._stable_domains = entries
+
+    @property
+    def stable_vertices(self) -> dict[PourbaixEntry, np.ndarray]:
+        """Vertices corresponding to each stable Pourbaix entries.
+
+        Returns:
+            dictionary of stable Pourbaix entries and their corresponding vertices.
+        """
+        return self._stable_domain_vertices
+
+    @stable_vertices.setter
+    def stable_vertices(self, vertices: dict[PourbaixEntry, np.ndarray]) -> None:
+        """Set the dictionary of stable vertices in the surface Pourbaix diagram.
+
+        Args:
+            vertices: dictionary of stable Pourbaix entries and their corresponding vertices.
+        """
+        self._stable_domain_vertices = vertices
+
+    def get_ref_elems(self) -> tuple[str]:
+        """Get reference elements for the surface Pourbaix diagram.
+
+        Returns:
+            tuple of reference elements in str.
+        """
+        ref_elems = set(itertools.chain.from_iterable([entry.composition.elements for entry in self.surface_entries]))
+        return tuple(elem.symbol for elem in ref_elems)
+
+    def _construct_surf_pbx_entries_for_domain(self, domain: PourbaixEntry) -> list[SurfacePourbaixEntry]:
+        """Construct the surface Pourbaix entries for each domain.
+
+        Args:
+            domain: Pourbaix entry or MultiEntry for which to construct the surface Pourbaix entries.
+
+        Returns:
+            list of SurfacePourbaixEntry for the domain.
+        """
+        if isinstance(domain, MultiEntry):
+            entries = domain.entry_list
+        elif isinstance(domain, PourbaixEntry):
+            entries = [domain]
+        else:
+            raise ValueError("Invalid entry type")
+
+        # match entries to reference elements based on composition
+        ref_comps = sorted(set(self.ref_elems) - SYMBOLS_HO)
+        entry_comps = sorted(
+            entries,  # there should be only 1 non-OH element per entry
+            key=lambda entry: list(set(entry.composition.elements) - ELEMENTS_HO).pop().symbol,
+        )
+
+        assert len(ref_comps) == len(entry_comps), "Mismatch in number of reference and entry compositions"
+        ref_entry_map = dict(zip(ref_comps, entry_comps))
+
+        # Use special OxygenPourbaixEntry for O2(g) + 2H+(aq) + 2e- -> H2O(l)
+        if "O" in self.ref_elems:
+            ref_entry_map["O"] = self.H2O_pourbaix_entry
+
+        return [SurfacePourbaixEntry(surf_entry, ref_entry_map) for surf_entry in self.surface_entries]
+
+    def construct_surf_pbx_entries(self) -> dict[PourbaixEntry, SurfacePourbaixEntry]:
+        """Construct the surface Pourbaix entries for each stable domain in the original Pourbaix diagram.
+
+        Returns:
+            dictionary of surface Pourbaix entries for each stable domain.
+        """
+        pbx_entries = {}
+        for entry in self.ref_pbx.stable_vertices:
+            surf_pbx_entries = self._construct_surf_pbx_entries_for_domain(entry)
+            pbx_entries[entry] = surf_pbx_entries
+
+        return pbx_entries
+
+    def _construct_entry_hyperplanes(self, domain: PourbaixEntry) -> np.ndarray:
+        """Construct the entry hyperplanes for each stable domain.
+
+        Args:
+            domain: Stable domain for which to construct the hyperplanes.
+
+        Returns:
+            np.ndarray of surface Pourbaix entry-based hyperplanes for the domain.
+        """
+        pourbaix_entries = self.ind_surface_pbx_entries.get(domain)
+        hyperplanes = np.array(
+            [
+                # np.array([-PREFAC * entry.npH, -entry.nPhi, 0, -entry.energy]) * entry.normalization_factor
+                np.array([-PREFAC * entry.npH, -entry.nPhi, 0, -entry.energy])
+                for entry in pourbaix_entries
+            ]
+        )
+        hyperplanes[:, 2] = 1
+        return hyperplanes
+
+    def _construct_border_hyperplanes_and_interior_point(
+        self, vertices: np.ndarray, entry_hyperplanes: np.ndarray
+    ) -> tuple[np.ndarray, np.ndarray]:
+        """Construct the border hyperplanes and calculate an interior point for each stable domain.
+
+        Args:
+            vertices: Boundaries in the pH-V space of the stable domain.
+            entry_hyperplanes: Surface Pourbaix entry-based hyperplanes calculated for the domain.
+
+        Returns:
+            tuple of border hyperplanes and interior point for the domain.
+        """
+        convex_hull = ConvexHull(vertices)
+        border_ineqs = np.insert(convex_hull.equations, 2, [0] * len(convex_hull.equations), axis=1)
+        limits = np.vstack([np.min(vertices, axis=0), np.max(vertices, axis=0)]).T
+        g_max = PourbaixDiagram.get_min_energy(limits, entry_hyperplanes)
+        lower_bound_ineq = [0, 0, -1, 2 * g_max]
+        border_hyperplanes = np.vstack([border_ineqs, [lower_bound_ineq]])
+        interior_point = np.array([*np.mean(limits, axis=1).tolist(), g_max])
+        return border_hyperplanes, interior_point
+
+    def construct_hyperplanes(self) -> dict[PourbaixEntry, dict[str, np.ndarray]]:
+        """Construct the hyperplanes and obtain an interior point for each stable domain.
+
+        Each hyperplane represents an inequality of the form a*pH + b*V + c*z - g(0, 0) <= 0 in the pH-V-z space,
+        where z represents an additional dimension that allows the energy to vary with pH and V. The hyperplanes
+        enclose the stable domain.
+
+        The interior point is a point inside the stable domain.
+
+        Returns:
+            dictionary of hyperplanes and interior points for each stable domain.
+        """
+        hyperplanes = {}
+        for entry, vertices in self.ref_pbx.stable_vertices.items():
+            entry_hyperplanes = self._construct_entry_hyperplanes(entry)
+            border_hyperplanes, interior_point = self._construct_border_hyperplanes_and_interior_point(
+                vertices, entry_hyperplanes
+            )
+            hyperplanes[entry] = {
+                "hyperplanes": np.vstack([entry_hyperplanes, border_hyperplanes]),
+                "interior_point": interior_point,
+            }
+        return hyperplanes
+
+    # TODO: move to PourbaixDiagram
+    @classmethod
+    def _sort_pourbaix_domain_vertices(cls, points: Iterable[float]) -> np.ndarray:
+        """Sort the Pourbaix domain vertices in the pH and V (phi) axes.
+
+        Args:
+            points: Iterable of points to sort.
+
+        Returns:
+            np.ndarray of sorted points.
+        """
+        points = np.array(points)[:, :2]
+        # Initial sort to ensure consistency
+        points = points[np.lexsort(np.transpose(points))]
+        center = np.mean(points, axis=0)
+        points_centered = points - center
+
+        # Sort points by cross product of centered points,
+        # isn't strictly necessary but useful for plotting tools
+        points_centered = sorted(points_centered, key=cmp_to_key(lambda x, y: x[0] * y[1] - x[1] * y[0]))
+        return points_centered + center
+
+    def _get_pourbaix_domains_ind(
+        self, domain: PourbaixEntry, halfspace_int: HalfspaceIntersection
+    ) -> tuple[dict, dict]:
+        """
+        Construct and sort the surface Pourbaix domains for an original stable domain.
+
+        Args:
+            domain: Stable domain for which to obtain surface Pourbaix entries.
+            halfspace_int: HalfspaceIntersection object for the domain.
+
+        Returns:
+            dictionary of Pourbaix domains of Simplex objects and dictionary of sorted vertices for
+            specified original domain.
+        """
+        pourbaix_entries = self.ind_surface_pbx_entries.get(domain)
+        pourbaix_domain_vertices = defaultdict(list)
+        # Attribute intersection points to surface Pourbaix entries, which define the Pourbaix domain for each entry
+        for intersection, facet in zip(halfspace_int.intersections, halfspace_int.dual_facets):
+            for v in facet:
+                if v < len(pourbaix_entries):  # remove the lower bound
+                    this_entry = pourbaix_entries[v]
+                    pourbaix_domain_vertices[this_entry].append(intersection)
+
+        pourbaix_domains = {}
+        pourbaix_domain_sorted_vertices = {}
+        for entry, points in pourbaix_domain_vertices.items():
+            sorted_points = self._sort_pourbaix_domain_vertices(points)
+            pourbaix_domains[entry] = [
+                Simplex(sorted_points[indices])
+                for indices in ConvexHull(sorted_points).simplices  # convex hull only to get simplices
+            ]
+            pourbaix_domain_sorted_vertices[entry] = sorted_points
+
+        return pourbaix_domains, pourbaix_domain_sorted_vertices
+
+    def construct_pourbaix_domains(self) -> tuple[dict, dict]:
+        """Obtain the surface Pourbaix domains for each original stable domain.
+
+        Returns:
+            dictionary of Pourbaix domains of Simplex objects and dictionary of sorted vertices for each domain.
+        """
+        stable_domains = {}
+        stable_domain_vertices = {}
+        for entry, hyperplane_info in self.ind_hyperplanes.items():
+            hs_int = HalfspaceIntersection(hyperplane_info["hyperplanes"], hyperplane_info["interior_point"])
+            pourbaix_domains, pourbaix_domain_vertices = self._get_pourbaix_domains_ind(entry, hs_int)
+            stable_domains[entry] = pourbaix_domains
+            stable_domain_vertices[entry] = pourbaix_domain_vertices
+
+        return stable_domains, stable_domain_vertices
+
+    # TODO might be a bit buggy for entries that span across distinct domains
+    def merge_pourbaix_domains(self) -> tuple[dict, dict]:
+        """Construct the overall Pourbaix domains across all original stable domains.
+
+        Returns:
+            dictionary of Pourbaix domains of Simplex objects and dictionary of sorted vertices.
+        """
+        # merge the stable domain vertices
+        merged_stable_domain_vertices = defaultdict(list)
+
+        for domain_vertices in self.ind_stable_domain_vertices.values():
+            for surf_pbx_entry, vertices in domain_vertices.items():
+                merged_stable_domain_vertices[surf_pbx_entry.entry] += vertices.tolist()
+
+        # TODO make it contain more information about the surface for disambiguation
+        # create fake Pourbaix entries for each region to be compatible with PourbaixDiagram
+        merged_stable_domain_vertices = {PourbaixEntry(k): v for k, v in merged_stable_domain_vertices.items()}
+        merged_stable_domains = {}
+        merged_stable_sorted_vertices = {}
+        for entry, points in merged_stable_domain_vertices.items():
+            sorted_points = self._sort_pourbaix_domain_vertices(points)
+            hull = ConvexHull(sorted_points)  # convex hull to remove interior points, but might cause some bugs
+            merged_stable_domains[entry] = [Simplex(sorted_points[indices]) for indices in hull.simplices]
+            merged_stable_sorted_vertices[entry] = sorted_points[hull.vertices]
+        return merged_stable_domains, merged_stable_sorted_vertices
+
+    def as_dict(self):
+        """Get MSONable dict."""
+        return {
+            "@module": type(self).__module__,
+            "@class": type(self).__name__,
+            "surface_entries": [entry.as_dict() for entry in self.surface_entries],
+            "reference_pourbaix_diagram": self.ref_pbx.as_dict(),
+            "reference_elements": self.ref_elems,
+        }
+
+    @classmethod
+    def from_dict(cls, dct: dict) -> Self:
+        """
+        Args:
+            dct (dict): Dict representation.
+
+        Returns:
+            SurfacePourbaixDiagram
+        """
+        return cls(
+            MontyDecoder().process_decoded(dct["surface_entries"]),
+            MontyDecoder().process_decoded(dct["reference_pourbaix_diagram"]),
+            reference_elements=dct["reference_elements"],
         )
 
 
