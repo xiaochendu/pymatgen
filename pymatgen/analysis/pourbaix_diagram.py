@@ -539,6 +539,22 @@ class IonEntry(PDEntry):
     def __repr__(self):
         return f"IonEntry : {self.composition} with energy = {self.energy:.4f}"
 
+    @property
+    def formula(self) -> str:
+        """A formula string with appended charge. The
+        charge is written with the sign preceding the magnitude, e.g.
+        'Ca1 +2'. Uncharged species have "(aq)" appended, e.g. "O2 (aq)".
+        """
+        return self.ion.formula
+
+    @property
+    def reduced_formula(self) -> str:
+        """A reduced formula string with appended charge. The
+        charge is placed in brackets with the sign preceding the magnitude, e.g.
+        'Ca[+2]'. Uncharged species have "(aq)" appended, e.g. "O2(aq)".
+        """
+        return self.ion.reduced_formula
+
 
 def ion_or_solid_comp_object(formula):
     """Get an Ion or Composition object given a formula.
