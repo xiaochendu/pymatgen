@@ -311,6 +311,38 @@ class OxygenPourbaixEntry(PourbaixEntry):
         return self.name
 
 
+class HydrogenPourbaixEntry(PourbaixEntry):
+    """Pourbaix entry for hydrogen. This is a special case because we disregard the ion concentration
+    which is assumed to be H+. Concentration of H+ is already factored into the pH term.
+    """
+
+    def __init__(self, entry: ComputedEntry, entry_id: str | None = None, concentration: float = 1.0):
+        super().__init__(entry, entry_id, concentration)
+        self.phase_type = "Ion"  # concentration is the same as pH, so we neglect it
+
+    @property
+    def npH(self):
+        """The number of H."""
+        return -self.entry.composition.get("H", 0) - 2 * self.entry.composition.get("O", 0)
+
+    @property
+    def nPhi(self):
+        """The number of electrons."""
+        return self.npH
+
+    # use the PourbaixEntry energy property since we've defined concentration as 1.0
+    # @property
+    # def energy(self):
+    #     """Total energy of the Pourbaix entry (at pH, V = 0 vs. SHE)."""
+    #     # Note: this implicitly depends on formation energies as input
+    #     return self.uncorrected_energy - (MU_H2O * self.nH2O)
+
+    @property
+    def normalization_factor(self):
+        """Sum of number of atoms minus the number of H and O in composition."""
+        return 1.0 / (self.num_atoms - 3 * self.composition.get("O", 0))  # last term assumes H2O
+
+
 class SurfacePourbaixEntry(PourbaixEntry):
     """
     Energy of each entry is the surface free energy determined with respect to the reference species
@@ -533,8 +565,8 @@ class IonEntry(PDEntry):
         return cls(Ion.from_dict(dct["ion"]), dct["energy"], dct.get("name"), dct.get("attribute"))
 
     def as_dict(self):
-        """Create a dict of composition, energy, and ion name."""
-        return {"ion": self.ion.as_dict(), "energy": self.energy, "name": self.name}
+        """Create a dict of composition, energy, ion name, and attribute."""
+        return {"ion": self.ion.as_dict(), "energy": self.energy, "name": self.name, "attribute": self.attribute}
 
     def __repr__(self):
         return f"IonEntry : {self.composition} with energy = {self.energy:.4f}"
@@ -1157,6 +1189,15 @@ class SurfacePourbaixDiagram(MSONable):
         return OxygenPourbaixEntry(ComputedEntry("H8O4", -9.83319943))
 
     @property
+    def H_ion_pourbaix_entry(self) -> IonEntry:
+        """Pourbaix entry for H+.
+
+        Returns:
+            Pourbaix entry for H+.
+        """
+        return HydrogenPourbaixEntry(IonEntry(Ion.from_formula("H[1+]"), 0.0))
+
+    @property
     def stable_entries(self) -> list[PourbaixEntry]:
         """The stable entries in the surface Pourbaix diagram.
 
@@ -1223,15 +1264,21 @@ class SurfacePourbaixDiagram(MSONable):
             entries,  # there should be only 1 non-OH element per entry
             key=lambda entry: list(set(entry.composition.elements) - ELEMENTS_HO).pop().symbol,
         )
-
         assert len(ref_comps) == len(entry_comps), "Mismatch in number of reference and entry compositions"
         ref_entry_map = dict(zip(ref_comps, entry_comps))
 
-        # Use special OxygenPourbaixEntry for O2(g) + 2H+(aq) + 2e- -> H2O(l)
+        # Use special OxygenPourbaixEntry for 1/2 O2(g) + 2H+(aq) + 2e- -> H2O(l)
         if "O" in self.ref_elems:
             ref_entry_map["O"] = self.H2O_pourbaix_entry
 
-        return [SurfacePourbaixEntry(surf_entry, ref_entry_map) for surf_entry in self.surface_entries]
+        # Use special HydrogenPourbaixEntry for 1/2 H2(g) -> H+(aq) + e-
+        if "H" in self.ref_elems:
+            ref_entry_map["H"] = self.H_ion_pourbaix_entry
+
+        return [
+            SurfacePourbaixEntry(surf_entry, ref_entry_map, entry_id=surf_entry.entry_id)
+            for surf_entry in self.surface_entries
+        ]
 
     def construct_surf_pbx_entries(self) -> dict[PourbaixEntry, SurfacePourbaixEntry]:
         """Construct the surface Pourbaix entries for each stable domain in the original Pourbaix diagram.
@@ -1243,7 +1290,6 @@ class SurfacePourbaixDiagram(MSONable):
         for entry in self.ref_pbx.stable_vertices:
             surf_pbx_entries = self._construct_surf_pbx_entries_for_domain(entry)
             pbx_entries[entry] = surf_pbx_entries
-
         return pbx_entries
 
     def _construct_entry_hyperplanes(self, domain: PourbaixEntry) -> np.ndarray:
@@ -1280,7 +1326,9 @@ class SurfacePourbaixDiagram(MSONable):
         """
         convex_hull = ConvexHull(vertices)
         border_ineqs = np.insert(convex_hull.equations, 2, [0] * len(convex_hull.equations), axis=1)
-        limits = np.vstack([np.min(vertices, axis=0), np.max(vertices, axis=0)]).T
+        limits = np.vstack(
+            [np.min(vertices, axis=0), np.max(vertices, axis=0)]
+        ).T  # BUG doesn't seem to work for non-quadrilateral domains
         g_max = PourbaixDiagram.get_min_energy(limits, entry_hyperplanes)
         lower_bound_ineq = [0, 0, -1, 2 * g_max]
         border_hyperplanes = np.vstack([border_ineqs, [lower_bound_ineq]])
@@ -1309,6 +1357,9 @@ class SurfacePourbaixDiagram(MSONable):
                 "hyperplanes": np.vstack([entry_hyperplanes, border_hyperplanes]),
                 "interior_point": interior_point,
             }
+            # breakpoint()
+            # print(f"Entry: {entry}, Hyperplanes: {hyperplanes[entry]}")
+            # print(f"vertices: {vertices}")
         return hyperplanes
 
     # TODO: move to PourbaixDiagram
@@ -1603,4 +1654,6 @@ def generate_entry_label(entry):
     # for this to work, the ion's charge always must be written AFTER
     # the sign (e.g., Fe+2 not Fe2+)
     string = entry.to_latex_string()
+    if entry.entry_id:
+        string = entry.entry_id
     return re.sub(r"()\[([^)]*)\]", r"\1$^{\2}$", string)

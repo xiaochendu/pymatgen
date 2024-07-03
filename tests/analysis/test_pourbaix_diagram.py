@@ -10,6 +10,7 @@ from monty.serialization import dumpfn, loadfn
 from pytest import approx
 
 from pymatgen.analysis.pourbaix_diagram import (
+    HydrogenPourbaixEntry,
     IonEntry,
     MultiEntry,
     OxygenPourbaixEntry,
@@ -120,6 +121,9 @@ class TestOxygenPourbaixEntry(PymatgenTest):
     def test_pourbaix_entry(self):
         assert self.pbx_entry.entry.energy == approx(-9.8332), "Wrong Energy!"
         assert self.pbx_entry.entry.name == "H2O", "Wrong Entry!"
+        assert self.pbx_entry.concentration == 1.0, "Wrong concentration!"
+        assert self.pbx_entry.phase_type == "Liquid", "Wrong phase type!"
+        assert self.pbx_entry.charge == 0, "Wrong charge!"
 
     def test_calc_coeff_terms(self):
         assert self.pbx_entry.npH == 8.0, "Wrong npH!"
@@ -147,7 +151,14 @@ class TestOxygenPourbaixEntry(PymatgenTest):
         assert reloaded.entry.data is not None
 
     def test_energy_functions(self):
-        assert self.pbx_entry.energy_at_conditions(10, 0) == approx(-5.10519943), "Wrong energy at pH = 10 and V = 0!"
+        # when considering the energies in the context of reduction 1/2 O2 or O -> H2O - 2H+ - 2e-
+        # the energy at conditions is Gibbs free energy of the reduction (forward) reaction
+        # by looking at the Pourbaix diagram for water, these energies should make sense
+        assert self.pbx_entry.energy_at_conditions(0, 0) == approx(-9.8332), "Wrong energy at pH = 0 and V = 0!"
+        assert self.pbx_entry.energy_at_conditions(14, 0.401) == approx(
+            -0.005999, abs=1e-3
+        ), "Wrong energy at pH = 14 and V = 0.401!"
+        assert self.pbx_entry.energy_at_conditions(10, 0) == approx(-5.1052), "Wrong energy at pH = 10 and V = 0!"
         assert self.pbx_entry.energy_at_conditions(np.array([1, 2, 3]), 0) == approx(
             [-9.36, -8.888, -8.415], abs=1e-3
         ), "Wrong energy at pH = [1, 2, 3] and V = 0!"
@@ -156,6 +167,68 @@ class TestOxygenPourbaixEntry(PymatgenTest):
         ), "Wrong energy at pH = 10 and V = [1, 2, 3]!"
         assert self.pbx_entry.energy_at_conditions(np.array([1, 2, 3]), np.array([1, 2, 3])) == approx(
             [-1.36, 7.112, 15.585],
+            abs=1e-3,
+        ), "Wrong energy at pH = [1, 2, 3] and V = [1, 2, 3]!"
+
+
+class TestHydrogenPourbaixEntry(PymatgenTest):
+    def setUp(self):
+        self.entry = IonEntry(Ion.from_formula("H[1+]"), 0.0)  # standard formation energy
+        self.pbx_entry = HydrogenPourbaixEntry(self.entry)
+
+    def test_pourbaix_entry(self):
+        assert self.pbx_entry.entry.energy == approx(0.0), "Wrong Energy!"
+        assert self.pbx_entry.entry.name == "H[+1]", "Wrong Entry!"
+        assert self.pbx_entry.concentration == 1.0, "Wrong concentration!"
+        assert self.pbx_entry.phase_type == "Ion", "Wrong phase type!"
+        assert self.pbx_entry.charge == 1, "Wrong charge!"
+
+    def test_calc_coeff_terms(self):
+        assert self.pbx_entry.npH == -1.0, "Wrong npH!"
+        assert self.pbx_entry.nPhi == -1.0, "Wrong nPhi!"
+        assert self.pbx_entry.nH2O == 0.0, "Wrong nH2O!"
+
+        # normalized values
+        assert self.pbx_entry.normalized_npH == -1.0, "Wrong normalized npH!"
+        assert self.pbx_entry.normalized_nPhi == -1.0, "Wrong normalized nPhi!"
+        assert self.pbx_entry.normalized_nH2O == 0.0, "Wrong normalized nH2O!"
+        assert self.pbx_entry.normalized_energy == approx(0.0), "Wrong normalized Energy!"
+
+    def test_as_from_dict(self):
+        dct = self.pbx_entry.as_dict()
+        ion_entry = self.pbx_entry.from_dict(dct)
+        assert ion_entry.name == "H[+1]", "Wrong Entry!"
+        assert ion_entry.energy == self.pbx_entry.energy, "as_dict and from_dict energies unequal"
+
+        # Ensure computed entry data persists
+        entry = IonEntry(Ion.from_formula("H3O[+]"), 0.0, attribute="test")
+        pbx_entry = HydrogenPourbaixEntry(entry=entry)
+        dumpfn(pbx_entry, "pbx_entry.json")
+        reloaded = loadfn("pbx_entry.json")
+        assert isinstance(reloaded.entry, IonEntry)
+        assert reloaded.entry.attribute == "test"
+
+    def test_energy_functions(self):
+        # when considering the energies in the context of oxidation (backward) 1/2 H2 or H -> H+ + e-
+        # the energy at conditions is the negative of the Gibbs free energy of the reduction (forward) reaction
+        # by looking at the Pourbaix diagram for water, these energies should make sense
+        assert self.pbx_entry.energy_at_conditions(0, 0) == approx(0.0), "Wrong energy at pH = 0 and V = 0!"
+        assert self.pbx_entry.energy_at_conditions(14, -0.829) == approx(
+            0.00159, abs=1e-3
+        ), "Wrong energy at pH = 14 and V = -0.829!"
+        assert self.pbx_entry.energy_at_conditions(np.array([1, 2, 3]), 0) == approx(
+            [-0.0591, -0.1182, -0.1773],
+            abs=1e-3,
+            # this is the oxidation (reverse) reaction, thus forming H+ becomes more favorable at higher pH
+        ), "Wrong energy at pH = [1, 2, 3] and V = 0!"
+        assert self.pbx_entry.energy_at_conditions(0, np.array([1, 2, 3])) == approx(
+            [-1.0, -2.0, -3.0], abs=1e-3
+        ), "Wrong energy at pH = 0 and V = [1, 2, 3]!"
+        assert self.pbx_entry.energy_at_conditions(10, np.array([1, 2, 3])) == approx(
+            [-1.591, -2.591, -3.591], abs=1e-3
+        ), "Wrong energy at pH = 10 and V = [1, 2, 3]!"
+        assert self.pbx_entry.energy_at_conditions(np.array([1, 2, 3]), np.array([1, 2, 3])) == approx(
+            [-1.0591, -2.1182, -3.1773],
             abs=1e-3,
         ), "Wrong energy at pH = [1, 2, 3] and V = [1, 2, 3]!"
 
