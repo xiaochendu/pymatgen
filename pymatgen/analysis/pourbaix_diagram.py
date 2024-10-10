@@ -1462,6 +1462,25 @@ class SurfacePourbaixDiagram(MSONable):
             merged_stable_sorted_vertices[entry] = sorted_points[hull.vertices]
         return merged_stable_domains, merged_stable_sorted_vertices
 
+    def get_all_entries_at_conditions(self, pH: float, V: float) -> list[SurfacePourbaixEntry]:
+        """Get all SurfacePourbaixEntries at a given pH and V condition.
+
+        Args:
+            pH: pH at which to find the entries.
+            V: V at which to find the entries.
+
+        Returns:
+            list of SurfacePourbaixEntries at the given pH and V condition.
+        """
+        stable_entry = self.ref_pbx.get_stable_entry(pH, V)  # regular PourbaixEntry at the given pH and V
+        surface_pbx_entries = self.ind_surface_pbx_entries.get(
+            stable_entry
+        )  # SurfacePourbaixEntries associated with the regular PourbaixEntry
+        all_energies = {}
+        for surface_pbx_entry in surface_pbx_entries:
+            all_energies[surface_pbx_entry.surface_entry] = surface_pbx_entry.energy_at_conditions(pH, V)
+        return all_energies
+
     def as_dict(self):
         """Get MSONable dict."""
         return {
@@ -1627,6 +1646,42 @@ class PourbaixPlotter:
         # ticklabels[-1] = f">={ticklabels[-1]}"
         # cbar.ax.set_yticklabels(ticklabels)
 
+        return ax
+
+    def get_energy_vs_potential_plot(
+        self, pH, V_range: tuple[float, float] = (-1, 2), V_resolution: int = 100, ax=None, lw=2
+    ) -> plt.Axes:
+        """Get the energy of an entry at a given pH as a function of potential.
+
+        Args:
+            pH: pH at which to get energy
+            V_range (tuple[float, float], optional): Voltage range for the plot. Defaults to (-3, 3).
+            V_resolution (int, optional): Voltage resolution. Defaults to 100.
+            ax (Axes, optional): Existing matplotlib Axes object for plotting. Defaults to None.
+            lw (int, optional): Line width for the plot. Defaults to 2.
+
+        Returns:
+            plt.Axes: Matplotlib Axes object with the energy plot
+        """
+        ax = ax or pretty_plot(16)
+
+        all_Vs = np.linspace(V_range[0], V_range[1], V_resolution)
+        all_energies = defaultdict(list)
+
+        # Obtain all energies for each entry at the given pH and V
+        for V in all_Vs:
+            curr_all_energies = self._pbx.get_all_entries_at_conditions(pH, V)
+            for entry, energy in curr_all_energies.items():
+                all_energies[entry].append(energy)
+        # Plot all entry with energies
+        for entry, energies in all_energies.items():
+            if not isinstance(entry, PourbaixEntry):
+                entry = PourbaixEntry(entry)
+            ax.plot(all_Vs, energies, label=generate_entry_label(entry), linewidth=lw)
+
+        ax.legend()
+        ax.set_title(f"Energy vs Potential at pH {pH}", fontsize=20, fontweight="bold")
+        ax.set(xlabel="Energy (eV/atom)", ylabel="V")
         return ax
 
     def domain_vertices(self, entry):
