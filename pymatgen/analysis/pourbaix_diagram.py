@@ -16,6 +16,7 @@ from multiprocessing import Pool
 from typing import TYPE_CHECKING, Dict, Iterable, List, Optional, Tuple, Union, no_type_check
 
 import numpy as np
+from matplotlib.colors import Colormap
 from monty.json import MontyDecoder, MSONable
 from scipy.spatial import ConvexHull, HalfspaceIntersection
 from scipy.special import comb
@@ -1517,6 +1518,7 @@ class PourbaixPlotter:
         show_water_lines: bool = True,
         show_neutral_axes: bool = True,
         ax: plt.Axes = None,
+        lw: int = 2,
     ) -> plt.Axes:
         """
         Plot Pourbaix diagram.
@@ -1532,6 +1534,7 @@ class PourbaixPlotter:
             show_neutral_axes; whether to show dashed horizontal and vertical lines
                 at 0 V and pH 7, respectively.
             ax (Axes): Matplotlib Axes instance for plotting
+            lw (int): Line width for each Pourbaix domain
 
         Returns:
             Axes: matplotlib Axes object with Pourbaix diagram
@@ -1542,7 +1545,6 @@ class PourbaixPlotter:
         ax = ax or pretty_plot(16)
 
         xlim, ylim = limits
-        lw = 3
 
         if show_water_lines:
             h_line = np.transpose([[xlim[0], -xlim[0] * PREFAC], [xlim[1], -xlim[1] * PREFAC]])
@@ -1560,6 +1562,7 @@ class PourbaixPlotter:
             center = np.mean(vertices, axis=0)
             x, y = np.transpose(np.vstack([vertices, vertices[0]]))
             ax.plot(x, y, "k-", linewidth=lw)
+            ax.fill(x, y, alpha=0.5)
 
             if label_domains:
                 ax.annotate(
