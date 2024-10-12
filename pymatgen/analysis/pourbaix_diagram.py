@@ -432,6 +432,14 @@ class SurfacePourbaixEntry(PourbaixEntry):
         """Elements in the entry."""
         return self.entry.elements
 
+    @property
+    def name(self):
+        """The entry's name."""
+        if self.phase_type == "Solid":
+            return f"{self.entry.formula}(s)"
+
+        return self.entry.name
+
     def as_dict(self):
         """Get dict which contains Surface Pourbaix Entry data.
         Note that the pH, voltage, H2O factors are always calculated when
@@ -1649,12 +1657,19 @@ class PourbaixPlotter:
         return ax
 
     def get_energy_vs_potential_plot(
-        self, pH, V_range: tuple[float, float] = (-1, 2), V_resolution: int = 100, ax=None, lw=2
+        self,
+        pH,
+        reference_entry: SurfacePourbaixEntry = None,
+        V_range: tuple[float, float] = (-1, 2),
+        V_resolution: int = 100,
+        ax=None,
+        lw=2,
     ) -> plt.Axes:
         """Get the energy of an entry at a given pH as a function of potential.
 
         Args:
             pH: pH at which to get energy
+            reference_entry (SurfacePourbaixEntry, optional): Reference entry for the plot. Defaults to None.
             V_range (tuple[float, float], optional): Voltage range for the plot. Defaults to (-3, 3).
             V_resolution (int, optional): Voltage resolution. Defaults to 100.
             ax (Axes, optional): Existing matplotlib Axes object for plotting. Defaults to None.
@@ -1679,9 +1694,15 @@ class PourbaixPlotter:
                 entry = PourbaixEntry(entry)
             ax.plot(all_Vs, energies, label=generate_entry_label(entry), linewidth=lw)
 
+        # TODO: subtract energy wrt reference
+
+        # TODO: find the reference bulk formula and plot regions
+        # TODO: actually do this outside of this method
+
         ax.legend()
+        ax.set_xlim(V_range)
         ax.set_title(f"Energy vs Potential at pH {pH}", fontsize=20, fontweight="bold")
-        ax.set(xlabel="Energy (eV/atom)", ylabel="V")
+        ax.set(xlabel="E (V)", ylabel="Energy (eV)")
         return ax
 
     def domain_vertices(self, entry):
