@@ -32,13 +32,13 @@ class Stringify:
 
     STRING_MODE = "SUBSCRIPT"
 
-    def to_pretty_string(self) -> str:
+    def to_pretty_string(self, **kwargs) -> str:
         """A pretty string representation. By default, the __str__ output is used, but this method can be
         overridden if a different representation from default is desired.
         """
         return str(self)
 
-    def to_latex_string(self) -> str:
+    def to_latex_string(self, full_formula=False) -> str:
         """Generate a LaTeX formatted string. The mode is set by the class variable STRING_MODE, which defaults to
         "SUBSCRIPT". e.g. Fe2O3 is transformed to Fe$_{2}$O$_{3}$. Setting STRING_MODE to "SUPERSCRIPT" creates
         superscript, e.g. Fe2+ becomes Fe^{2+}. The initial string is obtained from the class's __str__ method.
@@ -46,7 +46,7 @@ class Stringify:
         Returns:
             str: for LaTeX display with proper sub-/superscripts.
         """
-        str_ = self.to_pretty_string()
+        str_ = self.to_pretty_string(full_formula=full_formula)
         # First we process strings that already have _ and ^ by escaping the relevant parts.
         str_ = re.sub(r"_(\d+)", r"$_{\1}$", str_)
         str_ = re.sub(r"\^([\d\+\-]+)", r"$^{\1}$", str_)

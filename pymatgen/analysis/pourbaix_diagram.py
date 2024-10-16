@@ -252,9 +252,11 @@ class PourbaixEntry(MSONable, Stringify):
         """Number of atoms in current formula. Useful for normalization."""
         return self.composition.num_atoms
 
-    def to_pretty_string(self) -> str:
+    def to_pretty_string(self, full_formula=False) -> str:
         """A pretty string representation."""
         if self.phase_type == "Solid":
+            if full_formula:
+                return f"{self.entry.formula}(s)"  # return full formula if requested
             return f"{self.entry.reduced_formula}(s)"
 
         return self.entry.name
@@ -1366,7 +1368,6 @@ class SurfacePourbaixDiagram(MSONable):
                 "hyperplanes": np.vstack([entry_hyperplanes, border_hyperplanes]),
                 "interior_point": interior_point,
             }
-            # breakpoint()
             # print(f"Entry: {entry}, Hyperplanes: {hyperplanes[entry]}")
             # print(f"vertices: {vertices}")
         return hyperplanes
@@ -1546,6 +1547,7 @@ class PourbaixPlotter:
         show_neutral_axes: bool = True,
         ax: plt.Axes = None,
         lw: int = 2,
+        full_formula: bool = False,
     ) -> plt.Axes:
         """
         Plot Pourbaix diagram.
@@ -1562,6 +1564,7 @@ class PourbaixPlotter:
                 at 0 V and pH 7, respectively.
             ax (Axes): Matplotlib Axes instance for plotting
             lw (int): Line width for each Pourbaix domain
+            full_formula (bool): Whether to display full formula for each entry
 
         Returns:
             Axes: matplotlib Axes object with Pourbaix diagram
@@ -1593,7 +1596,7 @@ class PourbaixPlotter:
 
             if label_domains:
                 ax.annotate(
-                    generate_entry_label(entry),
+                    generate_entry_label(entry, full_formula=full_formula),
                     center,
                     ha="center",
                     va="center",
@@ -1647,7 +1650,8 @@ class PourbaixPlotter:
         # Plot stability map
         cax = ax.pcolor(pH, V, stability, cmap=cmap, vmin=0, vmax=e_hull_max)
         cbar = ax.figure.colorbar(cax)
-        cbar.set_label(f"Stability of {generate_entry_label(entry)} (eV/atom)")
+        full_formula = kwargs.get("full_formula", False)
+        cbar.set_label(f"Stability of {generate_entry_label(entry, full_formula=full_formula)} (eV/atom)")
 
         # Set ticklabels
         # ticklabels = [t.get_text() for t in cbar.ax.get_yticklabels()]
@@ -1664,6 +1668,7 @@ class PourbaixPlotter:
         V_resolution: int = 100,
         ax=None,
         lw=2,
+        full_formula=False,
     ) -> plt.Axes:
         """Get the energy of an entry at a given pH as a function of potential.
 
@@ -1674,6 +1679,7 @@ class PourbaixPlotter:
             V_resolution (int, optional): Voltage resolution. Defaults to 100.
             ax (Axes, optional): Existing matplotlib Axes object for plotting. Defaults to None.
             lw (int, optional): Line width for the plot. Defaults to 2.
+            full_formula (bool, optional): Whether to use full formula for the entry. Defaults to False.
 
         Returns:
             plt.Axes: Matplotlib Axes object with the energy plot
@@ -1692,7 +1698,7 @@ class PourbaixPlotter:
         for entry, energies in all_energies.items():
             if not isinstance(entry, PourbaixEntry):
                 entry = PourbaixEntry(entry)
-            ax.plot(all_Vs, energies, label=generate_entry_label(entry), linewidth=lw)
+            ax.plot(all_Vs, energies, label=generate_entry_label(entry, full_formula=full_formula), linewidth=lw)
 
         # TODO: subtract energy wrt reference
 
@@ -1717,12 +1723,13 @@ class PourbaixPlotter:
         return self._pbx._stable_domain_vertices[entry]
 
 
-def generate_entry_label(entry):
+def generate_entry_label(entry, full_formula=False):
     """
     Generates a label for the Pourbaix plotter.
 
     Args:
         entry (PourbaixEntry or MultiEntry): entry to get a label for
+        full_formula (bool): whether to use full formula
     """
     if isinstance(entry, MultiEntry):
         return " + ".join(entry.name for entry in entry.entry_list)
@@ -1732,7 +1739,7 @@ def generate_entry_label(entry):
     # will convert B(OH)4- to B(OH)$_4^-$.
     # for this to work, the ion's charge always must be written AFTER
     # the sign (e.g., Fe+2 not Fe2+)
-    string = entry.to_latex_string()
+    string = entry.to_latex_string(full_formula=full_formula)
     if entry.entry_id:
         string = entry.entry_id
-    return re.sub(r"()\[([^)]*)\]", r"\1$^{\2}$", string)
+    return re.sub(r"()\[([^)]*)\]", r"\1$^{\2}$", string).replace(" ", "")  # remove spaces
