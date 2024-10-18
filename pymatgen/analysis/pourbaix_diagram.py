@@ -357,21 +357,31 @@ class SurfacePourbaixEntry(PourbaixEntry):
 
     Surface free energy is calculated as -(E_step_1 + E_step_2), where -E_step_1 can be interpreted
     as the formation energy. E_step_2 is the solvation energy of the atoms in the solvent.
+
+    Also borrowing from surface_analysis.SlabEntry
     """
 
     def __init__(
         self,
-        surface_entry: ComputedEntry,
+        surface_entry: ComputedStructureEntry,
         reference_entries: dict[str, PourbaixEntry],
+        clean_entry: Optional[ComputedStructureEntry] = None,
         entry_id: Optional[float] = None,
         concentration: float = 1e-6,
+        label: Optional[str] = None,
+        marker: Optional[str] = None,
+        color: Optional[str] = None,
     ):
         """
         Args:
-            surface_entry (ComputedEntry): Surface entry
+            surface_entry (ComputedStructureEntry): Surface entry
             reference_entries (dict[str, PourbaixEntry]): Reference entries
+            clean_entry (ComputedStructureEntry): Pristine surface entry
             entry_id (float): Entry ID
             concentration (float): Concentration of surface entry species
+            label (str): Label for plotting
+            marker (str): Marker for plotting
+            color (str): Color for plotting
         """
         super().__init__(surface_entry, entry_id, concentration)
         self.surface_entry = surface_entry  # energy must be formation energy
@@ -380,6 +390,10 @@ class SurfacePourbaixEntry(PourbaixEntry):
             raise ValueError("All reference entries must be PourbaixEntry objects")
         if not any(entry.name == "H2O(l)" for entry in self.reference_entries.values()):
             raise ValueError("H2O must be included in reference entries")
+        self.label = label
+        self.clean_entry = clean_entry
+        self.mark = marker
+        self.color = color
 
     @property
     def npH(self):
@@ -470,11 +484,29 @@ class SurfacePourbaixEntry(PourbaixEntry):
         concentration = dct["concentration"]
         return cls(surface_entry, reference_entries, entry_id, concentration)
 
-    # @property
-    # def normalization_factor(self):
-    #     # TODO think about whether we should have an primary element, e.g. Ir in SrIrO3
-    #     """Sum of number of atoms minus the number of H and O in composition."""
-    #     return 1.0 / (self.num_atoms - self.composition.get("H", 0) - self.composition.get("O", 0))
+    @property
+    def get_unit_primitive_area(self):
+        """The surface area of the adsorbed system per unit area of the primitive slab system."""
+        curr_surface_area = self.surface_area(self.entry)
+        pristine_surface_area = self.surface_area(self.clean_entry)
+        return curr_surface_area / pristine_surface_area
+
+    @classmethod
+    def surface_area(cls, structure):
+        """The surface area of the adsorbed system."""
+        while hasattr(structure, "structure"):
+            structure = structure.structure
+        try:
+            matrix = structure.lattice.matrix
+        except AttributeError as e:
+            raise ValueError("Structure must be a ComputedStructureEntry or similar and have a lattice.matrix") from e
+
+        return np.linalg.norm(np.cross(matrix[0], matrix[1]))
+
+    @property
+    def normalization_factor(self):
+        """Using unit primitive area as normalization factor."""
+        return 1.0 / self.get_unit_primitive_area
 
 
 class MultiEntry(PourbaixEntry):
@@ -1170,10 +1202,19 @@ class SurfacePourbaixDiagram(MSONable):
     def __init__(
         self,
         surface_entries: Iterable[ComputedEntry],
+        reference_surface_entry: ComputedEntry,
         reference_pourbaix_diagram: PourbaixDiagram,
         reference_elements: Optional[Iterable[str]] = None,
     ) -> None:
+        """
+        Args:
+            surface_entries: list of ComputedEntry's with surface energies
+            reference_surface_entry: ComputedEntry for the reference surface
+            reference_pourbaix_diagram: PourbaixDiagram for the bulk phase
+            reference_elements: elements to be considered as reference in the surface Pourbaix diagram
+        """
         self.surface_entries = surface_entries  # with surface formation energies
+        self.reference_surface_entry = reference_surface_entry
         self.ref_pbx = reference_pourbaix_diagram
         self.ref_elems = reference_elements or self.get_ref_elems()
 
@@ -1287,7 +1328,9 @@ class SurfacePourbaixDiagram(MSONable):
             ref_entry_map["H"] = self.H_ion_pourbaix_entry
 
         return [
-            SurfacePourbaixEntry(surf_entry, ref_entry_map, entry_id=surf_entry.entry_id)
+            SurfacePourbaixEntry(
+                surf_entry, ref_entry_map, clean_entry=self.reference_surface_entry, entry_id=surf_entry.entry_id
+            )
             for surf_entry in self.surface_entries
         ]
 
@@ -1315,8 +1358,8 @@ class SurfacePourbaixDiagram(MSONable):
         pourbaix_entries = self.ind_surface_pbx_entries.get(domain)
         hyperplanes = np.array(
             [
-                # np.array([-PREFAC * entry.npH, -entry.nPhi, 0, -entry.energy]) * entry.normalization_factor
-                np.array([-PREFAC * entry.npH, -entry.nPhi, 0, -entry.energy])
+                np.array([-PREFAC * entry.npH, -entry.nPhi, 0, -entry.energy]) * entry.normalization_factor
+                # np.array([-PREFAC * entry.npH, -entry.nPhi, 0, -entry.energy])
                 for entry in pourbaix_entries
             ]
         )
