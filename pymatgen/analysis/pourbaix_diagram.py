@@ -26,7 +26,7 @@ from pymatgen.analysis.reaction_calculator import Reaction, ReactionError
 from pymatgen.core import Composition, Element
 from pymatgen.core.ion import Ion
 from pymatgen.entries.compatibility import MU_H2O
-from pymatgen.entries.computed_entries import ComputedEntry
+from pymatgen.entries.computed_entries import ComputedEntry, ComputedStructureEntry
 from pymatgen.util.coord import Simplex
 from pymatgen.util.due import Doi, due
 from pymatgen.util.plotting import pretty_plot
@@ -1514,23 +1514,39 @@ class SurfacePourbaixDiagram(MSONable):
             merged_stable_sorted_vertices[entry] = sorted_points[hull.vertices]
         return merged_stable_domains, merged_stable_sorted_vertices
 
-    def get_all_entries_at_conditions(self, pH: float, V: float) -> list[SurfacePourbaixEntry]:
+    def get_all_entries_at_conditions(
+        self, pH: float, V: float, reference_entry_id: str = None
+    ) -> list[SurfacePourbaixEntry]:
         """Get all SurfacePourbaixEntries at a given pH and V condition.
 
         Args:
             pH: pH at which to find the entries.
             V: V at which to find the entries.
+            reference_entry: reference entry id to normalize the energies.
 
         Returns:
             list of SurfacePourbaixEntries at the given pH and V condition.
         """
+        # if reference_entry:
+        #     reference_energy = reference_entry.normalized_energy_at_conditions(pH, V)
+        # else:
+        #     reference_energy = 0
         stable_entry = self.ref_pbx.get_stable_entry(pH, V)  # regular PourbaixEntry at the given pH and V
         surface_pbx_entries = self.ind_surface_pbx_entries.get(
             stable_entry
         )  # SurfacePourbaixEntries associated with the regular PourbaixEntry
         all_energies = {}
+        if reference_entry_id:
+            reference_energy = next(
+                entry.normalized_energy_at_conditions(pH, V)
+                for entry in surface_pbx_entries
+                if entry.entry_id == reference_entry_id
+            )
+        else:
+            reference_energy = 0
         for surface_pbx_entry in surface_pbx_entries:
-            all_energies[surface_pbx_entry.surface_entry] = surface_pbx_entry.energy_at_conditions(pH, V)
+            all_energies[surface_pbx_entry.surface_entry] = surface_pbx_entry.normalized_energy_at_conditions(pH, V)
+            all_energies[surface_pbx_entry.surface_entry] -= reference_energy
         return all_energies
 
     def as_dict(self):
@@ -1644,7 +1660,7 @@ class PourbaixPlotter:
                     ha="center",
                     va="center",
                     fontsize=label_fontsize,
-                    color="b",
+                    color="k",
                 ).draggable()
 
         ax.set_title(title, fontsize=20, fontweight="bold")
@@ -1706,23 +1722,29 @@ class PourbaixPlotter:
     def get_energy_vs_potential_plot(
         self,
         pH,
-        reference_entry: SurfacePourbaixEntry = None,
+        energy_range: Tuple[int] = None,
+        reference_entry_id: SurfacePourbaixEntry = None,
         V_range: tuple[float, float] = (-1, 2),
         V_resolution: int = 100,
         ax=None,
         lw=2,
         full_formula=False,
+        label_fontsize: int = 20,
+        label_domains=True,
     ) -> plt.Axes:
         """Get the energy of an entry at a given pH as a function of potential.
 
         Args:
             pH: pH at which to get energy
-            reference_entry (SurfacePourbaixEntry, optional): Reference entry for the plot. Defaults to None.
+            energy_range (tuple[int], optional): energy limits for the plot. Defaults to None.
+            reference_entry_id: reference entry id to offset the energies
             V_range (tuple[float, float], optional): Voltage range for the plot. Defaults to (-3, 3).
             V_resolution (int, optional): Voltage resolution. Defaults to 100.
             ax (Axes, optional): Existing matplotlib Axes object for plotting. Defaults to None.
             lw (int, optional): Line width for the plot. Defaults to 2.
             full_formula (bool, optional): Whether to use full formula for the entry. Defaults to False.
+            label_fontsize (int, optional): Font size for the labels. Defaults to 20.
+            label_domains (bool, optional): Whether to label the domains. Defaults to True.
 
         Returns:
             plt.Axes: Matplotlib Axes object with the energy plot
@@ -1734,24 +1756,35 @@ class PourbaixPlotter:
 
         # Obtain all energies for each entry at the given pH and V
         for V in all_Vs:
-            curr_all_energies = self._pbx.get_all_entries_at_conditions(pH, V)
+            curr_all_energies = self._pbx.get_all_entries_at_conditions(pH, V, reference_entry_id)
             for entry, energy in curr_all_energies.items():
                 all_energies[entry].append(energy)
         # Plot all entry with energies
+        # Sort the entries by label
         for entry, energies in all_energies.items():
             if not isinstance(entry, PourbaixEntry):
                 entry = PourbaixEntry(entry)
             ax.plot(all_Vs, energies, label=generate_entry_label(entry, full_formula=full_formula), linewidth=lw)
-
-        # TODO: subtract energy wrt reference
+            center = (all_Vs[V_resolution // 4], energies[V_resolution // 4])
+            if label_domains:
+                ax.annotate(
+                    generate_entry_label(entry, full_formula=full_formula),
+                    center,
+                    ha="center",
+                    va="bottom",
+                    fontsize=label_fontsize,
+                    color="k",
+                ).draggable()
 
         # TODO: find the reference bulk formula and plot regions
         # TODO: actually do this outside of this method
 
-        ax.legend()
+        # ax.legend()
         ax.set_xlim(V_range)
-        ax.set_title(f"Energy vs Potential at pH {pH}", fontsize=20, fontweight="bold")
-        ax.set(xlabel="E (V)", ylabel="Energy (eV)")
+        if energy_range:
+            ax.set_ylim(energy_range)
+        ax.set_title(r"$\Delta$ Energy vs Potential at pH " + f"{pH}", fontsize=20, fontweight="bold")
+        ax.set(xlabel=r"$\phi$ (V)", ylabel=r"$\Delta$ Energy (eV/area)")
         return ax
 
     def domain_vertices(self, entry):
