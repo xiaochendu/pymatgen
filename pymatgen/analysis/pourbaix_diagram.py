@@ -366,6 +366,7 @@ class SurfacePourbaixEntry(PourbaixEntry):
         surface_entry: ComputedStructureEntry,
         reference_entries: dict[str, PourbaixEntry],
         clean_entry: Optional[ComputedStructureEntry] = None,
+        clean_entry_factor: float = 1.0,
         entry_id: Optional[float] = None,
         concentration: float = 1e-6,
         label: Optional[str] = None,
@@ -377,6 +378,7 @@ class SurfacePourbaixEntry(PourbaixEntry):
             surface_entry (ComputedStructureEntry): Surface entry
             reference_entries (dict[str, PourbaixEntry]): Reference entries
             clean_entry (ComputedStructureEntry): Pristine surface entry
+            clean_entry_factor (float): Factor to scale the clean entry, can be used to account for supercell size
             entry_id (float): Entry ID
             concentration (float): Concentration of surface entry species
             label (str): Label for plotting
@@ -392,6 +394,7 @@ class SurfacePourbaixEntry(PourbaixEntry):
             raise ValueError("H2O must be included in reference entries")
         self.label = label
         self.clean_entry = clean_entry
+        self.clean_entry_factor = clean_entry_factor
         self.mark = marker
         self.color = color
 
@@ -488,7 +491,7 @@ class SurfacePourbaixEntry(PourbaixEntry):
     def get_unit_primitive_area(self):
         """The surface area of the adsorbed system per unit area of the primitive slab system."""
         curr_surface_area = self.surface_area(self.entry)
-        pristine_surface_area = self.surface_area(self.clean_entry)
+        pristine_surface_area = self.surface_area(self.clean_entry) * self.clean_entry_factor
         return curr_surface_area / pristine_surface_area
 
     @classmethod
@@ -1204,6 +1207,7 @@ class SurfacePourbaixDiagram(MSONable):
         surface_entries: Iterable[ComputedEntry],
         reference_surface_entry: ComputedEntry,
         reference_pourbaix_diagram: PourbaixDiagram,
+        reference_surface_entry_factor: float = 1.0,
         reference_elements: Optional[Iterable[str]] = None,
     ) -> None:
         """
@@ -1215,6 +1219,7 @@ class SurfacePourbaixDiagram(MSONable):
         """
         self.surface_entries = surface_entries  # with surface formation energies
         self.reference_surface_entry = reference_surface_entry
+        self.reference_surface_entry_factor = reference_surface_entry_factor
         self.ref_pbx = reference_pourbaix_diagram
         self.ref_elems = reference_elements or self.get_ref_elems()
 
@@ -1329,7 +1334,11 @@ class SurfacePourbaixDiagram(MSONable):
 
         return [
             SurfacePourbaixEntry(
-                surf_entry, ref_entry_map, clean_entry=self.reference_surface_entry, entry_id=surf_entry.entry_id
+                surf_entry,
+                ref_entry_map,
+                clean_entry=self.reference_surface_entry,
+                clean_entry_factor=self.reference_surface_entry_factor,
+                entry_id=surf_entry.entry_id,
             )
             for surf_entry in self.surface_entries
         ]
@@ -1770,8 +1779,6 @@ class PourbaixPlotter:
                 ax.annotate(
                     generate_entry_label(entry, full_formula=full_formula),
                     center,
-                    ha="center",
-                    va="bottom",
                     fontsize=label_fontsize,
                     color="k",
                 ).draggable()
@@ -1784,7 +1791,7 @@ class PourbaixPlotter:
         if energy_range:
             ax.set_ylim(energy_range)
         ax.set_title(r"$\Delta$ Energy vs Potential at pH " + f"{pH}", fontsize=20, fontweight="bold")
-        ax.set(xlabel=r"$\phi$ (V)", ylabel=r"$\Delta$ Energy (eV/area)")
+        ax.set(xlabel=r"$\phi$ (V)", ylabel=r"$\Delta$ Energy (eV/surface atom)")
         return ax
 
     def domain_vertices(self, entry):
