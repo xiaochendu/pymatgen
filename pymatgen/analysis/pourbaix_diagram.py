@@ -254,6 +254,8 @@ class PourbaixEntry(MSONable, Stringify):
 
     def to_pretty_string(self, full_formula=False) -> str:
         """A pretty string representation."""
+        if self.entry_id:
+            return f"{self.entry_id}"
         if self.phase_type == "Solid":
             if full_formula:
                 return f"{self.entry.formula}(s)"  # return full formula if requested
@@ -273,7 +275,7 @@ class OxygenPourbaixEntry(PourbaixEntry):
     """Pourbaix entry for oxygen. This is a special case because we count the number of O
     in composition for the normalized energy and disregard it for npH and nH2O."""
 
-    def __init__(self, entry: ComputedEntry, entry_id: Optional[str] = None, concentration: float = 1e-6):
+    def __init__(self, entry: ComputedEntry, entry_id: Optional[str] = None, concentration: float = 1.0):
         super().__init__(entry, entry_id, concentration)
         self.phase_type = "Liquid"
 
@@ -1524,17 +1526,18 @@ class SurfacePourbaixDiagram(MSONable):
         return merged_stable_domains, merged_stable_sorted_vertices
 
     def get_all_entries_at_conditions(
-        self, pH: float, V: float, reference_entry_id: str = None
-    ) -> list[SurfacePourbaixEntry]:
+        self, pH: float, V: float, reference_entry_id: str = None, subset_entry_ids: list[str] = None
+    ) -> tuple[PourbaixEntry, dict]:
         """Get all SurfacePourbaixEntries at a given pH and V condition.
 
         Args:
             pH: pH at which to find the entries.
             V: V at which to find the entries.
             reference_entry: reference entry id to normalize the energies.
+            subset_entry_ids: list of entry ids to plot.
 
         Returns:
-            list of SurfacePourbaixEntries at the given pH and V condition.
+            tuple of stable entry and dictionary of all energies at the given conditions
         """
         # if reference_entry:
         #     reference_energy = reference_entry.normalized_energy_at_conditions(pH, V)
@@ -1553,10 +1556,12 @@ class SurfacePourbaixDiagram(MSONable):
             )
         else:
             reference_energy = 0
+        if subset_entry_ids is not None:
+            surface_pbx_entries = [entry for entry in surface_pbx_entries if entry.entry_id in subset_entry_ids]
         for surface_pbx_entry in surface_pbx_entries:
             all_energies[surface_pbx_entry.surface_entry] = surface_pbx_entry.normalized_energy_at_conditions(pH, V)
             all_energies[surface_pbx_entry.surface_entry] -= reference_energy
-        return all_energies
+        return stable_entry, all_energies
 
     def as_dict(self):
         """Get MSONable dict."""
@@ -1733,13 +1738,16 @@ class PourbaixPlotter:
         pH,
         energy_range: Tuple[int] = None,
         reference_entry_id: SurfacePourbaixEntry = None,
+        subset_entry_ids: list[str] = None,
         V_range: tuple[float, float] = (-1, 2),
         V_resolution: int = 100,
         ax=None,
         lw=2,
         full_formula=False,
         label_fontsize: int = 20,
-        label_domains=True,
+        label_domains: bool = True,
+        label_domain_center: float = 0.5,
+        label_stable_bulk: bool = True,
     ) -> plt.Axes:
         """Get the energy of an entry at a given pH as a function of potential.
 
@@ -1747,6 +1755,7 @@ class PourbaixPlotter:
             pH: pH at which to get energy
             energy_range (tuple[int], optional): energy limits for the plot. Defaults to None.
             reference_entry_id: reference entry id to offset the energies
+            subset_entry_ids: list of entry ids to plot
             V_range (tuple[float, float], optional): Voltage range for the plot. Defaults to (-3, 3).
             V_resolution (int, optional): Voltage resolution. Defaults to 100.
             ax (Axes, optional): Existing matplotlib Axes object for plotting. Defaults to None.
@@ -1754,6 +1763,8 @@ class PourbaixPlotter:
             full_formula (bool, optional): Whether to use full formula for the entry. Defaults to False.
             label_fontsize (int, optional): Font size for the labels. Defaults to 20.
             label_domains (bool, optional): Whether to label the domains. Defaults to True.
+            label_domain_center (float, optional): Center for the domain labels. Defaults to 0.5.
+            label_stable_bulk (bool, optional): Whether to label the stable bulk. Defaults to True
 
         Returns:
             plt.Axes: Matplotlib Axes object with the energy plot
@@ -1762,10 +1773,14 @@ class PourbaixPlotter:
 
         all_Vs = np.linspace(V_range[0], V_range[1], V_resolution)
         all_energies = defaultdict(list)
+        all_stable_bulks_for_range = []
 
         # Obtain all energies for each entry at the given pH and V
         for V in all_Vs:
-            curr_all_energies = self._pbx.get_all_entries_at_conditions(pH, V, reference_entry_id)
+            stable_entry, curr_all_energies = self._pbx.get_all_entries_at_conditions(
+                pH, V, reference_entry_id=reference_entry_id, subset_entry_ids=subset_entry_ids
+            )
+            all_stable_bulks_for_range.append(stable_entry)
             for entry, energy in curr_all_energies.items():
                 all_energies[entry].append(energy)
         # Plot all entry with energies
@@ -1774,24 +1789,72 @@ class PourbaixPlotter:
             if not isinstance(entry, PourbaixEntry):
                 entry = PourbaixEntry(entry)
             ax.plot(all_Vs, energies, label=generate_entry_label(entry, full_formula=full_formula), linewidth=lw)
-            center = (all_Vs[V_resolution // 4], energies[V_resolution // 4])
+            center = (
+                all_Vs[int(label_domain_center * V_resolution)],
+                energies[int(label_domain_center * V_resolution)],
+            )
             if label_domains:
                 ax.annotate(
                     generate_entry_label(entry, full_formula=full_formula),
                     center,
+                    ha="center",
+                    va="center",
                     fontsize=label_fontsize,
                     color="k",
                 ).draggable()
 
-        # TODO: find the reference bulk formula and plot regions
-        # TODO: actually do this outside of this method
+        # Find the region for each stable bulk
+        if label_stable_bulk:
+            curr_stable_bulk = all_stable_bulks_for_range[0]
+            prev_index = 0
+            for i, stable_bulk in enumerate(all_stable_bulks_for_range):
+                if stable_bulk != curr_stable_bulk:
+                    ax.fill_between(
+                        all_Vs[prev_index:i],
+                        energy_range[0] if energy_range else min(energies),
+                        energy_range[1] if energy_range else max(energies),
+                        alpha=0.1,
+                    )
+                    # Annotate the stable bulk flipped 90 degrees counter-clockwise to the plot
+                    center = (all_Vs[(prev_index + i) // 2], energy_range[0] if energy_range else min(energies))
+                    ax.annotate(
+                        generate_entry_label(curr_stable_bulk, full_formula=False),
+                        center,
+                        ha="center",
+                        va="bottom",
+                        fontsize=label_fontsize,
+                        color="k",
+                        rotation=90,
+                    ).draggable()
+                    # Update the current stable bulk and the previous index
+                    curr_stable_bulk = stable_bulk
+                    prev_index = i
+            ax.fill_between(
+                all_Vs[prev_index:],
+                energy_range[0] if energy_range else min(energies),
+                energy_range[1] if energy_range else max(energies),
+                alpha=0.1,
+            )
+            center = (
+                all_Vs[(prev_index + len(all_stable_bulks_for_range)) // 2],
+                energy_range[0] if energy_range else min(energies),
+            )
+            ax.annotate(
+                generate_entry_label(curr_stable_bulk, full_formula=False),
+                center,
+                ha="center",
+                va="bottom",
+                fontsize=label_fontsize,
+                color="k",
+                rotation=90,
+            ).draggable()
 
         # ax.legend()
         ax.set_xlim(V_range)
         if energy_range:
             ax.set_ylim(energy_range)
         ax.set_title(r"$\Delta$ Energy vs Potential at pH " + f"{pH}", fontsize=20, fontweight="bold")
-        ax.set(xlabel=r"$\phi$ (V)", ylabel=r"$\Delta$ Energy (eV/surface atom)")
+        ax.set(xlabel="E (V)", ylabel=r"$\Delta$ Energy (eV/surface atom)")
         return ax
 
     def domain_vertices(self, entry):
@@ -1815,7 +1878,8 @@ def generate_entry_label(entry, full_formula=False):
         full_formula (bool): whether to use full formula
     """
     if isinstance(entry, MultiEntry):
-        return " + ".join(entry.name for entry in entry.entry_list)
+        sorted_entry_list = sorted(entry.entry_list, key=lambda x: x.name)
+        return " + ".join(generate_entry_label(sub_entry, full_formula) for sub_entry in sorted_entry_list)
 
     # TODO - a more elegant solution could be added later to Stringify
     # for example, the pattern re.sub(r"([-+][\d\.]*)", r"$^{\1}$", )
@@ -1823,6 +1887,4 @@ def generate_entry_label(entry, full_formula=False):
     # for this to work, the ion's charge always must be written AFTER
     # the sign (e.g., Fe+2 not Fe2+)
     string = entry.to_latex_string(full_formula=full_formula)
-    if entry.entry_id:
-        string = entry.entry_id
     return re.sub(r"()\[([^)]*)\]", r"\1$^{\2}$", string).replace(" ", "")  # remove spaces
