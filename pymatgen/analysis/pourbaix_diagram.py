@@ -15,6 +15,7 @@ from functools import cmp_to_key, partial
 from multiprocessing import Pool
 from typing import TYPE_CHECKING, Dict, Iterable, List, Optional, Tuple, Union, no_type_check
 
+import matplotlib.pyplot as plt
 import numpy as np
 from matplotlib.colors import Colormap
 from monty.json import MontyDecoder, MSONable
@@ -673,6 +674,8 @@ class PourbaixDiagram(MSONable):
         conc_dict: dict[str, float] | None = None,
         filter_solids: bool = True,
         nproc: int | None = None,
+        pH_limits: tuple[float, float] = (-2, 16),
+        phi_limits: tuple[float, float] = (-2, 2),
     ):
         """
         Args:
@@ -693,6 +696,8 @@ class PourbaixDiagram(MSONable):
                 most accurate Pourbaix diagrams.
             nproc (int): number of processes to generate multi-entries with
                 in parallel. Defaults to None (serial processing).
+            pH_limits (tuple): pH limits for Pourbaix diagram. Defaults to (-2, 16).
+            phi_limits (tuple): Potential limits for Pourbaix diagram. Defaults to (-2, 2).
         """
         entries = deepcopy(entries)
         self.filter_solids = filter_solids
@@ -758,7 +763,9 @@ class PourbaixDiagram(MSONable):
                 self._processed_entries = self._filtered_entries
                 self._multi_element = False
 
-        self._stable_domains, self._stable_domain_vertices = self.get_pourbaix_domains(self._processed_entries)
+        self._stable_domains, self._stable_domain_vertices = self.get_pourbaix_domains(
+            self._processed_entries, limits=[pH_limits, phi_limits]
+        )
 
     def _convert_entries_to_points(self, pourbaix_entries):
         """
@@ -1618,6 +1625,7 @@ class PourbaixPlotter:
         label_fontsize: int = 20,
         show_water_lines: bool = True,
         show_neutral_axes: bool = True,
+        cmap: str | Colormap = "RdYlBu_r",
         ax: plt.Axes = None,
         lw: int = 2,
         full_formula: bool = False,
@@ -1635,6 +1643,7 @@ class PourbaixPlotter:
                 of water stability.
             show_neutral_axes; whether to show dashed horizontal and vertical lines
                 at 0 V and pH 7, respectively.
+            cmap (str or Colormap): colormap for Pourbaix diagram
             ax (Axes): Matplotlib Axes instance for plotting
             lw (int): Line width for each Pourbaix domain
             full_formula (bool): Whether to display full formula for each entry
@@ -1649,6 +1658,9 @@ class PourbaixPlotter:
 
         xlim, ylim = limits
 
+        if isinstance(cmap, str):
+            cmap = plt.get_cmap(cmap)
+
         if show_water_lines:
             h_line = np.transpose([[xlim[0], -xlim[0] * PREFAC], [xlim[1], -xlim[1] * PREFAC]])
             o_line = np.transpose([[xlim[0], -xlim[0] * PREFAC + 1.23], [xlim[1], -xlim[1] * PREFAC + 1.23]])
@@ -1661,11 +1673,22 @@ class PourbaixPlotter:
             ax.plot(neutral_line[0], neutral_line[1], "k-.", linewidth=lw)
             ax.plot(V0_line[0], V0_line[1], "k-.", linewidth=lw)
 
-        for entry, vertices in self._pbx._stable_domain_vertices.items():
+        # Sort according to formula string
+        # self._pbx.stable_entries.sort(lambda x: x.entry_id)
+
+        for entry in self._pbx.stable_entries:
+            vertices = self._pbx.stable_vertices[entry]
+            # for entry, vertices in self._pbx._stable_domain_vertices.items():
             center = np.mean(vertices, axis=0)
             x, y = np.transpose(np.vstack([vertices, vertices[0]]))
             ax.plot(x, y, "k-", linewidth=lw)
-            ax.fill(x, y, alpha=0.5)
+
+            # Use reduced formula to index a number for the color
+            cmap_value = (np.sum([ord(c) for c in entry.composition.reduced_formula]) % 128) / 128
+
+            # normalized_dist_origin = np.linalg.norm(center) / np.linalg.norm([xlim[1], ylim[1]])
+            # normalized_dist_center = np.linalg.norm(center - np.mean(limits)) / np.linalg.norm(limits)
+            ax.fill(x, y, alpha=0.5, color=cmap(cmap_value))
 
             if label_domains:
                 ax.annotate(
@@ -1854,7 +1877,7 @@ class PourbaixPlotter:
         if energy_range:
             ax.set_ylim(energy_range)
         ax.set_title(r"$\Delta$ Energy vs Potential at pH " + f"{pH}", fontsize=20, fontweight="bold")
-        ax.set(xlabel="E (V)", ylabel=r"$\Delta$ Energy (eV/surface atom)")
+        ax.set(xlabel="E (V)", ylabel=r"$\Delta$ Energy (eV/unit surface)")
         return ax
 
     def domain_vertices(self, entry):
