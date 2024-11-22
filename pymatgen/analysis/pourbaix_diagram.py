@@ -1762,6 +1762,8 @@ class PourbaixPlotter:
         energy_range: Tuple[int] = None,
         reference_entry_id: SurfacePourbaixEntry = None,
         subset_entry_ids: list[str] = None,
+        show_non_subset_entries: bool = False,
+        highlight_subset_entries: bool = False,
         V_range: tuple[float, float] = (-1, 2),
         V_resolution: int = 100,
         ax=None,
@@ -1779,6 +1781,8 @@ class PourbaixPlotter:
             energy_range (tuple[int], optional): energy limits for the plot. Defaults to None.
             reference_entry_id: reference entry id to offset the energies
             subset_entry_ids: list of entry ids to plot
+            show_non_subset_entries: whether to show non-subset entries
+            highlight_subset_entries: whether to highlight the subset entries
             V_range (tuple[float, float], optional): Voltage range for the plot. Defaults to (-3, 3).
             V_resolution (int, optional): Voltage resolution. Defaults to 100.
             ax (Axes, optional): Existing matplotlib Axes object for plotting. Defaults to None.
@@ -1798,10 +1802,15 @@ class PourbaixPlotter:
         all_energies = defaultdict(list)
         all_stable_bulks_for_range = []
 
+        if subset_entry_ids is not None and not show_non_subset_entries:
+            included_subset_entry_ids = subset_entry_ids
+        else:
+            included_subset_entry_ids = None
+
         # Obtain all energies for each entry at the given pH and V
         for V in all_Vs:
             stable_entry, curr_all_energies = self._pbx.get_all_entries_at_conditions(
-                pH, V, reference_entry_id=reference_entry_id, subset_entry_ids=subset_entry_ids
+                pH, V, reference_entry_id=reference_entry_id, subset_entry_ids=included_subset_entry_ids
             )
             all_stable_bulks_for_range.append(stable_entry)
             for entry, energy in curr_all_energies.items():
@@ -1811,20 +1820,30 @@ class PourbaixPlotter:
         for entry, energies in all_energies.items():
             if not isinstance(entry, PourbaixEntry):
                 entry = PourbaixEntry(entry)
-            ax.plot(all_Vs, energies, label=generate_entry_label(entry, full_formula=full_formula), linewidth=lw)
-            center = (
-                all_Vs[int(label_domain_center * V_resolution)],
-                energies[int(label_domain_center * V_resolution)],
-            )
-            if label_domains:
-                ax.annotate(
-                    generate_entry_label(entry, full_formula=full_formula),
-                    center,
-                    ha="center",
-                    va="center",
-                    fontsize=label_fontsize,
-                    color="k",
-                ).draggable()
+            if highlight_subset_entries and entry.entry_id not in subset_entry_ids:
+                ax.plot(all_Vs, energies, color="gray", linewidth=lw, alpha=0.25)
+            else:
+                ax.plot(
+                    all_Vs,
+                    energies,
+                    label=generate_entry_label(entry, full_formula=full_formula),
+                    linewidth=lw,
+                    zorder=10,
+                )
+                center = (
+                    all_Vs[int(label_domain_center * V_resolution)],
+                    energies[int(label_domain_center * V_resolution)],
+                )
+                if label_domains:
+                    ax.annotate(
+                        generate_entry_label(entry, full_formula=full_formula),
+                        center,
+                        ha="center",
+                        va="center",
+                        fontsize=label_fontsize,
+                        color="k",
+                        zorder=11,
+                    ).draggable()
 
         # Find the region for each stable bulk
         if label_stable_bulk:
