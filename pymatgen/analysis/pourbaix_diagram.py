@@ -1701,7 +1701,7 @@ class PourbaixPlotter:
                 ).draggable()
 
         ax.set_title(title, fontsize=20, fontweight="bold")
-        ax.set(xlabel="pH", ylabel="E (V)", xlim=xlim, ylim=ylim)
+        ax.set(xlabel="pH", ylabel=r"$U_{SHE}$ (V)", xlim=xlim, ylim=ylim)
         return ax
 
     @no_type_check
@@ -1772,6 +1772,7 @@ class PourbaixPlotter:
         label_fontsize: int = 20,
         label_domains: bool = True,
         label_domain_center: float = 0.5,
+        label_domain_positions: dict[str, float] = None,
         label_stable_bulk: bool = True,
     ) -> plt.Axes:
         """Get the energy of an entry at a given pH as a function of potential.
@@ -1791,6 +1792,7 @@ class PourbaixPlotter:
             label_fontsize (int, optional): Font size for the labels. Defaults to 20.
             label_domains (bool, optional): Whether to label the domains. Defaults to True.
             label_domain_center (float, optional): Center for the domain labels. Defaults to 0.5.
+            label_domain_positions (dict[str, float], optional): Positions for the domain labels. Defaults to None.
             label_stable_bulk (bool, optional): Whether to label the stable bulk. Defaults to True
 
         Returns:
@@ -1817,19 +1819,22 @@ class PourbaixPlotter:
                 all_energies[entry].append(energy)
         # Plot all entry with energies
         # Sort the entries by label
-        for entry, energies in all_energies.items():
+        for i, (entry, energies) in enumerate(all_energies.items()):
             if not isinstance(entry, PourbaixEntry):
                 entry = PourbaixEntry(entry)
             if highlight_subset_entries and entry.entry_id not in subset_entry_ids:
-                ax.plot(all_Vs, energies, color="gray", linewidth=lw, alpha=0.25)
+                ax.plot(all_Vs, energies, color="gray", linewidth=lw / 2, alpha=0.2)
             else:
                 ax.plot(
                     all_Vs,
                     energies,
                     label=generate_entry_label(entry, full_formula=full_formula),
                     linewidth=lw,
-                    zorder=10,
+                    alpha=0.8,
                 )
+                if label_domain_positions is not None and label_domain_positions.get(entry.entry_id) is not None:
+                    center = label_domain_positions[entry.entry_id]
+                else:
                 center = (
                     all_Vs[int(label_domain_center * V_resolution)],
                     energies[int(label_domain_center * V_resolution)],
@@ -1858,14 +1863,18 @@ class PourbaixPlotter:
                         alpha=0.1,
                     )
                     # Annotate the stable bulk flipped 90 degrees counter-clockwise to the plot
-                    center = (all_Vs[(prev_index + i) // 2], energy_range[0] if energy_range else min(energies))
+                    center = (
+                        all_Vs[(prev_index + i) // 2],
+                        (energy_range[0] if energy_range else min(energies)) + 0.25,
+                    )
                     ax.annotate(
                         generate_entry_label(curr_stable_bulk, full_formula=False),
                         center,
                         ha="center",
                         va="bottom",
-                        fontsize=label_fontsize,
+                        fontsize=0.9 * label_fontsize,
                         color="k",
+                        alpha=0.5,
                         rotation=90,
                     ).draggable()
                     # Update the current stable bulk and the previous index
@@ -1879,15 +1888,16 @@ class PourbaixPlotter:
             )
             center = (
                 all_Vs[(prev_index + len(all_stable_bulks_for_range)) // 2],
-                energy_range[0] if energy_range else min(energies),
+                (energy_range[0] if energy_range else min(energies)) + 0.25,
             )
             ax.annotate(
                 generate_entry_label(curr_stable_bulk, full_formula=False),
                 center,
-                ha="center",
+                ha="right",
                 va="bottom",
-                fontsize=label_fontsize,
+                fontsize=0.9 * label_fontsize,
                 color="k",
+                alpha=0.5,
                 rotation=90,
             ).draggable()
 
@@ -1895,8 +1905,8 @@ class PourbaixPlotter:
         ax.set_xlim(V_range)
         if energy_range:
             ax.set_ylim(energy_range)
-        ax.set_title(r"$\Delta$ Energy vs Potential at pH " + f"{pH}", fontsize=20, fontweight="bold")
-        ax.set(xlabel="E (V)", ylabel=r"$\Delta$ Energy (eV/unit surface)")
+        # ax.set_title(r"$\Delta$ Energy vs Potential at pH " + f"{pH}", fontsize=20, fontweight="bold")
+        ax.set(xlabel=r"$U_{SHE}$ (V)", ylabel=r"$\Delta\Omega$ (eV/unit surface)")
         return ax
 
     def domain_vertices(self, entry):
@@ -1929,4 +1939,4 @@ def generate_entry_label(entry, full_formula=False):
     # for this to work, the ion's charge always must be written AFTER
     # the sign (e.g., Fe+2 not Fe2+)
     string = entry.to_latex_string(full_formula=full_formula)
-    return re.sub(r"()\[([^)]*)\]", r"\1$^{\2}$", string).replace(" ", "")  # remove spaces
+    return re.sub(r"()\[([^)]*)\]", r"\1$^{\2}$", string)
