@@ -1398,13 +1398,11 @@ class SurfacePourbaixDiagram(MSONable):
         """
         convex_hull = ConvexHull(vertices)
         border_ineqs = np.insert(convex_hull.equations, 2, [0] * len(convex_hull.equations), axis=1)
-        limits = np.vstack(
-            [np.min(vertices, axis=0), np.max(vertices, axis=0)]
-        ).T  # BUG doesn't seem to work for non-quadrilateral domains
+        limits = np.vstack([np.min(vertices, axis=0), np.max(vertices, axis=0)]).T
         g_max = PourbaixDiagram.get_min_energy(limits, entry_hyperplanes)
         lower_bound_ineq = [0, 0, -1, 2 * g_max]
         border_hyperplanes = np.vstack([border_ineqs, [lower_bound_ineq]])
-        interior_point = np.array([*np.mean(limits, axis=1).tolist(), g_max])
+        interior_point = np.array([*np.mean(vertices, axis=0).tolist(), g_max])
         return border_hyperplanes, interior_point
 
     def construct_hyperplanes(self) -> dict[PourbaixEntry, dict[str, np.ndarray]]:
