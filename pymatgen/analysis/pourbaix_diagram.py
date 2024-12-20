@@ -1448,9 +1448,9 @@ class SurfacePourbaixDiagram(MSONable):
         center = np.mean(points, axis=0)
         points_centered = points - center
 
-        # Sort points by cross product of centered points,
-        # isn't strictly necessary but useful for plotting tools
-        points_centered = sorted(points_centered, key=cmp_to_key(lambda x, y: x[0] * y[1] - x[1] * y[0]))
+        # Sort points in a clockwise manner
+        angles = np.arctan2(points_centered[:, 1], points_centered[:, 0])
+        points_centered = points_centered[np.argsort(angles)]
         return points_centered + center
 
     def _get_pourbaix_domains_ind(
