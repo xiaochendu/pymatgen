@@ -1485,7 +1485,6 @@ class SurfacePourbaixDiagram(MSONable):
                 for indices in ConvexHull(sorted_points).simplices  # convex hull only to get simplices
             ]
             pourbaix_domain_sorted_vertices[entry] = sorted_points
-
         return pourbaix_domains, pourbaix_domain_sorted_vertices
 
     def construct_pourbaix_domains(self) -> tuple[dict, dict]:
@@ -1497,21 +1496,23 @@ class SurfacePourbaixDiagram(MSONable):
         stable_domains = {}
         stable_domain_vertices = {}
         for entry, hyperplane_info in self.ind_hyperplanes.items():
-            hs_int = HalfspaceIntersection(hyperplane_info["hyperplanes"], hyperplane_info["interior_point"])
+            # print(f"Entry: {entry}, Hyperplanes: {hyperplane_info}")
+            hyperplanes = hyperplane_info["hyperplanes"]
+            interior_point = hyperplane_info["interior_point"]
+            hs_int = HalfspaceIntersection(hyperplanes, interior_point)
             pourbaix_domains, pourbaix_domain_vertices = self._get_pourbaix_domains_ind(entry, hs_int)
             stable_domains[entry] = pourbaix_domains
             stable_domain_vertices[entry] = pourbaix_domain_vertices
 
         return stable_domains, stable_domain_vertices
 
-    # TODO might be a bit buggy for entries that span across distinct domains
     def merge_pourbaix_domains(self) -> tuple[dict, dict]:
         """Construct the overall Pourbaix domains across all original stable domains.
 
         Returns:
             dictionary of Pourbaix domains of Simplex objects and dictionary of sorted vertices.
         """
-        # merge the stable domain vertices
+        # Merge the stable domain vertices
         merged_stable_domain_vertices = defaultdict(list)
 
         for domain_vertices in self.ind_stable_domain_vertices.values():
@@ -1520,14 +1521,41 @@ class SurfacePourbaixDiagram(MSONable):
 
         # TODO make it contain more information about the surface for disambiguation
         # create fake Pourbaix entries for each region to be compatible with PourbaixDiagram
-        merged_stable_domain_vertices = {PourbaixEntry(k): v for k, v in merged_stable_domain_vertices.items()}
+        merged_stable_domain_vertices = {
+            PourbaixEntry(k): np.unique(np.array(v).round(decimals=3), axis=0)  # round to avoid numerical errors
+            for k, v in merged_stable_domain_vertices.items()
+        }
         merged_stable_domains = {}
         merged_stable_sorted_vertices = {}
+
+        # General idea: for overlapping points between different entries, keep them
+        # For remaining points, do convex hull to remove interior points, and then add back the overlapping points
+
+        # Collate all points, round to 3 decimal places to avoid numerical errors
+        all_points = self._sort_pourbaix_domain_vertices(
+            np.concatenate(list(merged_stable_domain_vertices.values())).round(decimals=3)
+        )
+        unique_points, counts = np.unique(all_points, return_counts=True, axis=0)
+        overlapping_points = unique_points[counts > 1]
+
         for entry, points in merged_stable_domain_vertices.items():
-            sorted_points = self._sort_pourbaix_domain_vertices(points)
-            hull = ConvexHull(sorted_points)  # convex hull to remove interior points, but might cause some bugs
-            merged_stable_domains[entry] = [Simplex(sorted_points[indices]) for indices in hull.simplices]
-            merged_stable_sorted_vertices[entry] = sorted_points[hull.vertices]
+            sorted_points = np.unique(self._sort_pourbaix_domain_vertices(points).round(decimals=3), axis=0)
+
+            # Check if sorted points contain overlapping points
+            overlapping_indices = np.where(
+                np.isclose(sorted_points[:, None, :], overlapping_points[None, :, :], atol=1e-3).all(-1).any(-1)
+            )[0]
+
+            # Placeholder for merged stable domains
+            merged_stable_domains[entry] = []
+            # merged_stable_domains[entry] = [Simplex(sorted_points[indices]) for indices in hull.simplices]
+
+            hull = ConvexHull(sorted_points)  # convex hull to remove interior points
+            # Combine the convex hull vertices with the overlapping points
+            combined_idx = np.unique(sorted(overlapping_indices.tolist() + hull.vertices.tolist()))
+            # Rearrange the indices again for plotting
+            merged_stable_sorted_vertices[entry] = self._sort_pourbaix_domain_vertices(sorted_points[combined_idx])
+
         return merged_stable_domains, merged_stable_sorted_vertices
 
     def get_all_entries_at_conditions(
@@ -1829,14 +1857,15 @@ class PourbaixPlotter:
                     label=generate_entry_label(entry, full_formula=full_formula),
                     linewidth=lw,
                     alpha=0.8,
+                    zorder=5,
                 )
                 if label_domain_positions is not None and label_domain_positions.get(entry.entry_id) is not None:
                     center = label_domain_positions[entry.entry_id]
                 else:
-                center = (
-                    all_Vs[int(label_domain_center * V_resolution)],
-                    energies[int(label_domain_center * V_resolution)],
-                )
+                    center = (
+                        all_Vs[int(label_domain_center * V_resolution)],
+                        energies[int(label_domain_center * V_resolution)],
+                    )
                 if label_domains:
                     ax.annotate(
                         generate_entry_label(entry, full_formula=full_formula),
