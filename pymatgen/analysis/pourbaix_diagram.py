@@ -1112,6 +1112,97 @@ class PourbaixDiagram(MSONable):
         return pourbaix_domains, pourbaix_domain_vertices
 
     @staticmethod
+    def get_3D_pourbaix_domains(pourbaix_entries, limits=None):
+        """Get a set of Pourbaix stable domains (i. e. polygons) in
+        pH-V-conc space from a list of pourbaix_entries.
+
+        This function works by using scipy's HalfspaceIntersection
+        function to construct all of the 3-D polygons that form the
+        boundaries of the hyperplanes corresponding to individual entry
+        gibbs free energies as a function of pH, V, and conc. Hyperplanes
+        of the form a*pH + b*V + c*log(conc) + 1 - g(0, 0) are constructed and
+        supplied to HalfspaceIntersection, which then finds the
+        boundaries of each Pourbaix region using the intersection
+        points.
+
+        New energy_at_conditions(pH, V, conc) should be
+        self.energy_without_conc + self.npH * PREFAC * pH + self.nPhi * V + PREFAC * np.log10(conc).
+
+        Args:
+            pourbaix_entries ([PourbaixEntry]): Pourbaix entries
+                with which to construct stable Pourbaix domains
+            limits ([[float]]): limits in which to do the pourbaix
+                analysis
+
+        Returns:
+            Returns a dict of the form {entry: [boundary_points]}.
+            The list of boundary points are the sides of the N-1
+            dim polytope bounding the allowable ph-V-log(conc) range of each entry.
+        """
+
+        # Limits correspond to pH, V, and log(conc)pourbaix_domains_3D
+        # log10(conc) in practice should be -5 or lower
+        if limits is None:
+            limits = [[-2, 16], [-4, 4], [-12, -2]]
+
+        # Get hyperplanes
+        hyperplanes = [
+            np.array([-PREFAC * entry.npH, -entry.nPhi, -PREFAC * entry.n_conc, 0, -entry.energy_without_conc_term])
+            * entry.normalization_factor
+            for entry in pourbaix_entries
+        ]
+
+        hyperplanes = np.array(hyperplanes)
+        hyperplanes[:, -2] = 1
+
+        g_max = PourbaixDiagram.get_min_energy(limits, hyperplanes)
+
+        # Add border hyperplanes and generate HalfspaceIntersection
+        border_hyperplanes = [
+            [-1, 0, 0, 0, limits[0][0]],
+            [1, 0, 0, 0, -limits[0][1]],
+            [0, -1, 0, 0, limits[1][0]],
+            [0, 1, 0, 0, -limits[1][1]],
+            [0, 0, -1, 0, limits[2][0]],
+            [0, 0, 1, 0, -limits[2][1]],
+            [0, 0, 0, -1, 2 * g_max],
+        ]
+        hs_hyperplanes = np.vstack([hyperplanes, border_hyperplanes])
+        interior_point = [*np.mean(limits, axis=1).tolist(), g_max]
+        hs_int = HalfspaceIntersection(hs_hyperplanes, np.array(interior_point))
+
+        # organize the boundary points by entry
+        pourbaix_domains = {entry: [] for entry in pourbaix_entries}
+        for intersection, facet in zip(hs_int.intersections, hs_int.dual_facets):
+            for v in facet:
+                if v < len(pourbaix_entries):
+                    this_entry = pourbaix_entries[v]
+                    pourbaix_domains[this_entry].append(intersection)
+
+        # Remove entries with no Pourbaix region
+        pourbaix_domains = {k: v for k, v in pourbaix_domains.items() if v}
+        pourbaix_domain_vertices = {}
+
+        for entry, points in pourbaix_domains.items():
+            points = np.array(points)[:, :3]
+            # Initial sort to ensure consistency
+            points = points[np.lexsort(np.transpose(points))]
+            center = np.mean(points, axis=0)
+            points_centered = points - center
+
+            # TODO: need to make the lines correct in 3D
+            # Sort points by cross product of centered points,
+            # isn't strictly necessary but useful for plotting tools
+            points_centered = sorted(points_centered, key=cmp_to_key(lambda x, y: x[0] * y[1] - x[1] * y[0]))
+            points = points_centered + center
+
+            # Create simplices corresponding to Pourbaix boundary
+            simplices = [Simplex(points[indices]) for indices in ConvexHull(points).simplices]
+            pourbaix_domains[entry] = simplices
+            pourbaix_domain_vertices[entry] = points
+        return pourbaix_domains, pourbaix_domain_vertices
+
+    @staticmethod
     def get_min_energy(limits, hyperplanes):
         """Get the lower bound energy for the Pourbaix diagram.
 
@@ -1420,6 +1511,7 @@ class SurfacePourbaixDiagram(MSONable):
             pbx_entries[entry] = surf_pbx_entries
         return pbx_entries
 
+    # 2D surface Pourbaix diagram case
     def _construct_entry_hyperplanes(self, domain: PourbaixEntry) -> np.ndarray:
         """Construct the entry hyperplanes for each stable domain.
 
@@ -1431,6 +1523,7 @@ class SurfacePourbaixDiagram(MSONable):
         """
         pourbaix_entries = self.ind_surface_pbx_entries.get(domain)
         hyperplanes = np.array(
+            # TODO: edit to add in k_B T ln(a_{H_x AO_y^{z-}}) term
             [
                 np.array([-PREFAC * entry.npH, -entry.nPhi, 0, -entry.energy]) * entry.normalization_factor
                 # np.array([-PREFAC * entry.npH, -entry.nPhi, 0, -entry.energy])
@@ -1440,6 +1533,29 @@ class SurfacePourbaixDiagram(MSONable):
         hyperplanes[:, 2] = 1
         return hyperplanes
 
+    # 2D surface Pourbaix diagram case
+    def _construct_border_hyperplanes_and_interior_point(
+        self, vertices: np.ndarray, entry_hyperplanes: np.ndarray
+    ) -> tuple[np.ndarray, np.ndarray]:
+        """Construct the border hyperplanes and calculate an interior point for each stable domain.
+
+        Args:
+            vertices: Boundaries in the pH-V space of the stable domain.
+            entry_hyperplanes: Surface Pourbaix entry-based hyperplanes calculated for the domain.
+
+        Returns:
+            tuple of border hyperplanes and interior point for the domain.
+        """
+        convex_hull = ConvexHull(vertices)
+        border_ineqs = np.insert(convex_hull.equations, 2, [0] * len(convex_hull.equations), axis=1)
+        limits = np.vstack([np.min(vertices, axis=0), np.max(vertices, axis=0)]).T
+        g_max = PourbaixDiagram.get_min_energy(limits, entry_hyperplanes)
+        lower_bound_ineq = [0, 0, -1, 2 * g_max]
+        border_hyperplanes = np.vstack([border_ineqs, [lower_bound_ineq]])
+        interior_point = np.array([*np.mean(vertices, axis=0).tolist(), g_max])
+        return border_hyperplanes, interior_point
+
+    # TODO: 3D surface Pourbaix diagram case
     def _construct_border_hyperplanes_and_interior_point(
         self, vertices: np.ndarray, entry_hyperplanes: np.ndarray
     ) -> tuple[np.ndarray, np.ndarray]:
@@ -1701,6 +1817,9 @@ class PourbaixPlotter:
         """
         plt = self.get_pourbaix_plot(*args, **kwargs)
         plt.show()
+
+    def get_3D_pourbaix_plot(self):
+        pass
 
     @no_type_check
     def get_pourbaix_plot(
