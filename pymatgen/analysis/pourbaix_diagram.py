@@ -128,10 +128,23 @@ class PourbaixEntry(MSONable, Stringify):
         return self.npH - self.charge
 
     @property
+    def n_conc(self):
+        """The conc number used for 3D plots that vary concentration. 1 for ions, 0 for solids."""
+        return int(isinstance(self.entry, IonEntry))
+
+    # TODO: write tests for n_conc
+
+    @property
+    def energy_without_conc_term(self):
+        """Total energy of the Pourbaix entry (at pH, V = 0 vs. SHE)."""
+        # Note: this implicitly depends on formation energies as input
+        return self.uncorrected_energy - (MU_H2O * self.nH2O)
+
+    @property
     def energy(self):
         """Total energy of the Pourbaix entry (at pH, V = 0 vs. SHE)."""
         # Note: this implicitly depends on formation energies as input
-        return self.uncorrected_energy + self.conc_term - (MU_H2O * self.nH2O)
+        return self.uncorrected_energy - (MU_H2O * self.nH2O) + self.conc_term
 
     @property
     def energy_per_atom(self):
@@ -265,10 +278,15 @@ class PourbaixEntry(MSONable, Stringify):
         return self.entry.name
 
     def __repr__(self):
-        energy, npH, nPhi, nH2O, entry_id = self.energy, self.npH, self.nPhi, self.nH2O, self.entry_id
+        energy, npH, nPhi, nH2O, entry_id = (
+            self.energy,
+            self.npH,
+            self.nPhi,
+            self.nH2O,
+            self.entry_id,
+        )
         return (
-            f"{type(self).__name__}({self.entry.composition} with {energy=:.4f}, {npH=}, "
-            f"{nPhi=}, {nH2O=}, {entry_id=})"
+            f"{type(self).__name__}({self.entry.composition} with {energy=:.4f}, {npH=}, {nPhi=}, {nH2O=}, {entry_id=})"
         )
 
 
@@ -276,7 +294,12 @@ class OxygenPourbaixEntry(PourbaixEntry):
     """Pourbaix entry for oxygen. This is a special case because we count the number of O
     in composition for the normalized energy and disregard it for npH and nH2O."""
 
-    def __init__(self, entry: ComputedEntry, entry_id: Optional[str] = None, concentration: float = 1.0):
+    def __init__(
+        self,
+        entry: ComputedEntry,
+        entry_id: Optional[str] = None,
+        concentration: float = 1.0,
+    ):
         super().__init__(entry, entry_id, concentration)
         self.phase_type = "Liquid"
 
@@ -322,7 +345,12 @@ class HydrogenPourbaixEntry(PourbaixEntry):
     which is assumed to be H+. Concentration of H+ is already factored into the pH term.
     """
 
-    def __init__(self, entry: ComputedEntry, entry_id: str | None = None, concentration: float = 1.0):
+    def __init__(
+        self,
+        entry: ComputedEntry,
+        entry_id: str | None = None,
+        concentration: float = 1.0,
+    ):
         super().__init__(entry, entry_id, concentration)
         self.phase_type = "Ion"  # concentration is the same as pH, so we neglect it
 
@@ -536,7 +564,18 @@ class MultiEntry(PourbaixEntry):
         we save some space by having a set of conditionals to define the attributes.
         """
         # Attributes that are weighted averages of entry attributes
-        if attr in ["energy", "npH", "nH2O", "nPhi", "conc_term", "composition", "uncorrected_energy", "elements"]:
+        if attr in [
+            "energy",
+            "npH",
+            "nH2O",
+            "nPhi",
+            "n_conc",
+            "conc_term",
+            "composition",
+            "uncorrected_energy",
+            "energy_without_conc_term",
+            "elements",
+        ]:
             # TODO: Composition could be changed for compat with sum
             start = Composition() if attr == "composition" else 0
             weighted_values = (getattr(entry, attr) * weight for entry, weight in zip(self.entry_list, self.weights))
@@ -555,7 +594,13 @@ class MultiEntry(PourbaixEntry):
         return " + ".join(entry.name for entry in self.entry_list)
 
     def __repr__(self):
-        energy, npH, nPhi, nH2O, entry_id = self.energy, self.npH, self.nPhi, self.nH2O, self.entry_id
+        energy, npH, nPhi, nH2O, entry_id = (
+            self.energy,
+            self.npH,
+            self.nPhi,
+            self.nH2O,
+            self.entry_id,
+        )
         cls_name, species = type(self).__name__, self.name
         return f"Pourbaix{cls_name}({energy=:.4f}, {npH=}, {nPhi=}, {nH2O=}, {entry_id=}, {species=})"
 
@@ -611,11 +656,21 @@ class IonEntry(PDEntry):
     @classmethod
     def from_dict(cls, dct: dict) -> Self:
         """Get an IonEntry object from a dict."""
-        return cls(Ion.from_dict(dct["ion"]), dct["energy"], dct.get("name"), dct.get("attribute"))
+        return cls(
+            Ion.from_dict(dct["ion"]),
+            dct["energy"],
+            dct.get("name"),
+            dct.get("attribute"),
+        )
 
     def as_dict(self):
         """Create a dict of composition, energy, ion name, and attribute."""
-        return {"ion": self.ion.as_dict(), "energy": self.energy, "name": self.name, "attribute": self.attribute}
+        return {
+            "ion": self.ion.as_dict(),
+            "energy": self.energy,
+            "name": self.name,
+            "attribute": self.attribute,
+        }
 
     def __repr__(self):
         return f"IonEntry : {self.composition} with energy = {self.energy:.4f}"
@@ -857,7 +912,8 @@ class PourbaixDiagram(MSONable):
         """
         # Get composition
         tot_comp = Composition(self._elt_comp)
-
+        # TODO: Assume this generation with fixed conc is valid for
+        # 3D Pourbaix diagram that varies aqueous species conentration
         min_entries, valid_facets = self._get_hull_in_nph_nphi_space(entries)
 
         combos = []
@@ -1559,7 +1615,11 @@ class SurfacePourbaixDiagram(MSONable):
         return merged_stable_domains, merged_stable_sorted_vertices
 
     def get_all_entries_at_conditions(
-        self, pH: float, V: float, reference_entry_id: str = None, subset_entry_ids: list[str] = None
+        self,
+        pH: float,
+        V: float,
+        reference_entry_id: str = None,
+        subset_entry_ids: list[str] = None,
     ) -> tuple[PourbaixEntry, dict]:
         """Get all SurfacePourbaixEntries at a given pH and V condition.
 
@@ -1689,7 +1749,12 @@ class PourbaixPlotter:
 
         if show_water_lines:
             h_line = np.transpose([[xlim[0], -xlim[0] * PREFAC], [xlim[1], -xlim[1] * PREFAC]])
-            o_line = np.transpose([[xlim[0], -xlim[0] * PREFAC + 1.23], [xlim[1], -xlim[1] * PREFAC + 1.23]])
+            o_line = np.transpose(
+                [
+                    [xlim[0], -xlim[0] * PREFAC + 1.23],
+                    [xlim[1], -xlim[1] * PREFAC + 1.23],
+                ]
+            )
             ax.plot(h_line[0], h_line[1], "r--", linewidth=lw)
             ax.plot(o_line[0], o_line[1], "r--", linewidth=lw)
 
@@ -1838,7 +1903,10 @@ class PourbaixPlotter:
         # Obtain all energies for each entry at the given pH and V
         for V in all_Vs:
             stable_entry, curr_all_energies = self._pbx.get_all_entries_at_conditions(
-                pH, V, reference_entry_id=reference_entry_id, subset_entry_ids=included_subset_entry_ids
+                pH,
+                V,
+                reference_entry_id=reference_entry_id,
+                subset_entry_ids=included_subset_entry_ids,
             )
             all_stable_bulks_for_range.append(stable_entry)
             for entry, energy in curr_all_energies.items():
