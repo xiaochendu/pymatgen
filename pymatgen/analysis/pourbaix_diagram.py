@@ -1112,7 +1112,15 @@ class PourbaixDiagram(MSONable):
         return pourbaix_domains, pourbaix_domain_vertices
 
     @staticmethod
-    def get_3D_pourbaix_domains(pourbaix_entries, limits=None):
+
+    @staticmethod
+    def get_3D_pourbaix_domains(
+        pourbaix_entries: list[PourbaixEntry],
+        limits: list[list[float]] | None = None,
+        at_equilibrium: bool = False,
+        ref_pbx_entry: PourbaixEntry | None = None,
+        interior_point: list[float] | None = None,
+    ) -> dict[PourbaixEntry, list[list[float]]]:
         """Get a set of Pourbaix stable domains (i. e. polygons) in
         pH-V-conc space from a list of pourbaix_entries.
 
@@ -1128,17 +1136,32 @@ class PourbaixDiagram(MSONable):
         New energy_at_conditions(pH, V, conc) should be
         self.energy_without_conc + self.npH * PREFAC * pH + self.nPhi * V + PREFAC * np.log10(conc).
 
+        If at_equilibrium is True, the function will add an additional hyperplane corresponding to the
+        equilibrium condition of the reference entry. The ref_pbx_entry is assumed to be already in the
+        list of pourbaix_entries. The new hyperplane will point in the opposite direction compared with
+        the other hyperplanes, effectively constraining the Pourbaix diagram to be one dimension lower
+        than the non-equilibrium case.
+
         Args:
             pourbaix_entries ([PourbaixEntry]): Pourbaix entries
                 with which to construct stable Pourbaix domains
             limits ([[float]]): limits in which to do the pourbaix
                 analysis
+            at_equilibrium (bool): whether to calculate the Pourbaix diagram at equilibrium
+                conditions or not
+            ref_pbx_entry (PourbaixEntry): entry to use as a reference for
+                eqilibrium calculations
+            interior_point ([float]): guess for the interior point of the
+                HalfspaceIntersection object
 
         Returns:
             Returns a dict of the form {entry: [boundary_points]}.
             The list of boundary points are the sides of the N-1
             dim polytope bounding the allowable ph-V-log(conc) range of each entry.
         """
+
+        # Sort entries by name
+        pourbaix_entries = sorted(pourbaix_entries, key=lambda x: x.name)
 
         # Limits correspond to pH, V, and log(conc)pourbaix_domains_3D
         # log10(conc) in practice should be -5 or lower
@@ -1151,9 +1174,28 @@ class PourbaixDiagram(MSONable):
             * entry.normalization_factor
             for entry in pourbaix_entries
         ]
-
         hyperplanes = np.array(hyperplanes)
         hyperplanes[:, -2] = 1
+        # Add additional hyperplane to constrain the Pourbaix diagram at equilibrium
+        if at_equilibrium:
+            if ref_pbx_entry is None:
+                raise ValueError("Must provide a reference Pourbaix entry for equilibrium calculations.")
+            ref_pbx_hyperplane = (
+                -np.array(
+                    [
+                        -PREFAC * ref_pbx_entry.npH,
+                        -ref_pbx_entry.nPhi,
+                        -PREFAC * ref_pbx_entry.n_conc,
+                        0,
+                        -(
+                            ref_pbx_entry.energy_without_conc_term - 1e-3
+                        ),  # add a small offset to avoid numerical issues
+                    ]
+                )
+                * ref_pbx_entry.normalization_factor
+            )
+            ref_pbx_hyperplane[-2] = -1
+            hyperplanes = np.vstack([hyperplanes, ref_pbx_hyperplane])
 
         g_max = PourbaixDiagram.get_min_energy(limits, hyperplanes)
 
@@ -1168,7 +1210,11 @@ class PourbaixDiagram(MSONable):
             [0, 0, 0, -1, 2 * g_max],
         ]
         hs_hyperplanes = np.vstack([hyperplanes, border_hyperplanes])
+        # Interior point needs to be inside hyperplane of any reference entry
+        # Strongly recommend to guess an interior_point for at_equilibrium calculations
+        if interior_point is None:
         interior_point = [*np.mean(limits, axis=1).tolist(), g_max]
+
         hs_int = HalfspaceIntersection(hs_hyperplanes, np.array(interior_point))
 
         # organize the boundary points by entry
@@ -1187,19 +1233,20 @@ class PourbaixDiagram(MSONable):
             points = np.array(points)[:, :3]
             # Initial sort to ensure consistency
             points = points[np.lexsort(np.transpose(points))]
-            center = np.mean(points, axis=0)
-            points_centered = points - center
+            # center = np.mean(points, axis=0)
+            # points_centered = points - center
 
-            # TODO: need to make the lines correct in 3D
+            # TODO: Can probably do some sorting for annotations
             # Sort points by cross product of centered points,
             # isn't strictly necessary but useful for plotting tools
-            points_centered = sorted(points_centered, key=cmp_to_key(lambda x, y: x[0] * y[1] - x[1] * y[0]))
-            points = points_centered + center
+            # points_centered = sorted(points_centered, key=cmp_to_key(lambda x, y: x[0] * y[1] - x[1] * y[0]))
+            # points = points_centered + center
 
             # Create simplices corresponding to Pourbaix boundary
             simplices = [Simplex(points[indices]) for indices in ConvexHull(points).simplices]
             pourbaix_domains[entry] = simplices
             pourbaix_domain_vertices[entry] = points
+
         return pourbaix_domains, pourbaix_domain_vertices
 
     @staticmethod
