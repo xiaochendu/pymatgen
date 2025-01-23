@@ -756,6 +756,8 @@ class PourbaixDiagram(MSONable):
         nproc: int | None = None,
         pH_limits: tuple[float, float] = (-2, 16),
         phi_limits: tuple[float, float] = (-2, 2),
+        lg_conc_limits: tuple[float, float] = (-12, -2),
+        process_3D: bool = False,
     ):
         """
         Args:
@@ -778,6 +780,8 @@ class PourbaixDiagram(MSONable):
                 in parallel. Defaults to None (serial processing).
             pH_limits (tuple): pH limits for Pourbaix diagram. Defaults to (-2, 16).
             phi_limits (tuple): Potential limits for Pourbaix diagram. Defaults to (-2, 2).
+            lg_conc_limits (tuple): Log concentration limits for 3D Pourbaix diagram. Defaults to (-12, -2).
+            process_3D (bool): Whether to process the Pourbaix diagram in 3D. Defaults to False.
         """
         entries = deepcopy(entries)
         self.filter_solids = filter_solids
@@ -843,8 +847,16 @@ class PourbaixDiagram(MSONable):
                 self._processed_entries = self._filtered_entries
                 self._multi_element = False
 
+        # Sort entries by name
+        self._processed_entries = sorted(self._processed_entries, key=lambda x: x.name)
+
         self._stable_domains, self._stable_domain_vertices = self.get_pourbaix_domains(
             self._processed_entries, limits=[pH_limits, phi_limits]
+        )
+
+        if process_3D:
+            self._stable_3D_domains, self._stable_3D_domain_vertices = self.get_3D_pourbaix_domains(
+                self._processed_entries, limits=[pH_limits, phi_limits, lg_conc_limits]
         )
 
     def _convert_entries_to_points(self, pourbaix_entries):
@@ -1188,7 +1200,7 @@ class PourbaixDiagram(MSONable):
         # Sort entries by name
         pourbaix_entries = sorted(pourbaix_entries, key=lambda x: x.name)
 
-        # Limits correspond to pH, V, and log(conc)pourbaix_domains_3D
+        # Limits correspond to pH, V, and log(conc)
         # log10(conc) in practice should be -5 or lower
         if limits is None:
             limits = [[-2, 16], [-4, 4], [-12, -2]]
@@ -1370,19 +1382,39 @@ class PourbaixDiagram(MSONable):
         self._stable_domains = entries
 
     @property
+    def stable_3D_entries(self):
+        """The stable entries in the pH-V-log(conc) 3D Pourbaix diagram."""
+        return list(self._stable_3D_domains)
+
+    @stable_3D_entries.setter
+    def stable_3D_entries(self, entries):
+        """Set the stable entries in the pH-V-log(conc) 3D Pourbaix diagram."""
+        self._stable_3D_domains = entries
+
+    @property
     def unstable_entries(self):
         """All unstable entries in the Pourbaix diagram."""
         return [entry for entry in self.all_entries if entry not in self.stable_entries]
 
     @property
     def stable_vertices(self):
-        """Vertices corresponding to each stable Pourbaix entries."""
+        """Vertices corresponding to each stable Pourbaix entry."""
         return self._stable_domain_vertices
 
     @stable_vertices.setter
     def stable_vertices(self, vertices):
         """Set the stable vertices in the Pourbaix diagram."""
         self._stable_domain_vertices = vertices
+
+    @property
+    def stable_3D_vertices(self):
+        """3D vertices in pH-V-log(conc) corresponding to each stable Pourbaix entry."""
+        return self._stable_3D_domain_vertices
+
+    @stable_3D_vertices.setter
+    def stable_3D_vertices(self, vertices):
+        """Set the stable pH-V-log(conc) 3D vertices in the Pourbaix diagram."""
+        self._stable_3D_domain_vertices = vertices
 
     @property
     def all_entries(self):
