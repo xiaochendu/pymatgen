@@ -1495,10 +1495,10 @@ class SurfacePourbaixDiagram(MSONable):
                     self.ref_pbx.all_entries
                 )
             # Step 1: create SurfacePourbaixEntry's for each region
-            self.ind_3D_surface_pbx_entries = self.construct_3D_surf_pbx_entries()
+            self.ind_3D_surface_pbx_entries = self.construct_surf_pbx_entries(process_3D=True)
 
             # Step 2: construct individual hyperplanes for each region
-            self.ind_3D_hyperplanes = self.construct_3D_hyperplanes()
+            self.ind_3D_hyperplanes = self.construct_hyperplanes(process_3D=True)
 
             # Step 3: construct Pourbaix domains for each region
             self.ind_3D_stable_domains, self.ind_3D_stable_domain_vertices = self.construct_pourbaix_domains(
@@ -1651,28 +1651,19 @@ class SurfacePourbaixDiagram(MSONable):
             for surf_entry in self.surface_entries
         ]
 
-    # 2D surface Pourbaix diagram case
-    def construct_surf_pbx_entries(self) -> dict[PourbaixEntry, SurfacePourbaixEntry]:
+    # Both 2D and 3D surface Pourbaix diagram case
+    def construct_surf_pbx_entries(self, process_3D: bool = False) -> dict[PourbaixEntry, SurfacePourbaixEntry]:
         """Construct the surface Pourbaix entries for each stable domain in the original Pourbaix diagram.
 
-        Returns:
-            dictionary of surface Pourbaix entries for each stable domain.
-        """
-        pbx_entries = {}
-        for entry in self.ref_pbx.stable_vertices:
-            surf_pbx_entries = self._construct_surf_pbx_entries_for_domain(entry)
-            pbx_entries[entry] = surf_pbx_entries
-        return pbx_entries
-
-    # 3D surface Pourbaix diagram case
-    def construct_3D_surf_pbx_entries(self) -> dict[PourbaixEntry, SurfacePourbaixEntry]:
-        """Construct the surface Pourbaix entries for each stable domain in the original 3D Pourbaix diagram.
+        Args:
+            process_3D: whether we are processing a 3D Pourbaix diagram
 
         Returns:
             dictionary of surface Pourbaix entries for each stable domain.
         """
         pbx_entries = {}
-        for entry in self.ref_pbx.stable_3D_entries:
+        stable_vertices = self.ref_pbx.stable_3D_vertices if process_3D else self.ref_pbx.stable_vertices
+        for entry in stable_vertices:
             surf_pbx_entries = self._construct_surf_pbx_entries_for_domain(entry)
             pbx_entries[entry] = surf_pbx_entries
         return pbx_entries
@@ -1764,20 +1755,31 @@ class SurfacePourbaixDiagram(MSONable):
         interior_point = np.array([*np.mean(vertices, axis=0).tolist(), g_max])
         return border_hyperplanes, interior_point
 
-    def construct_hyperplanes(self) -> dict[PourbaixEntry, dict[str, np.ndarray]]:
+    # Both 2D and 3D surface Pourbaix diagram case
+    def construct_hyperplanes(self, process_3D: bool = False) -> dict[PourbaixEntry, dict[str, np.ndarray]]:
         """Construct the hyperplanes and obtain an interior point for each stable domain.
 
         Each hyperplane represents an inequality of the form a*pH + b*V + c*z - g(0, 0) <= 0 in the pH-V-z space,
         where z represents an additional dimension that allows the energy to vary with pH and V. The hyperplanes
-        enclose the stable domain.
+        enclose the stable domain. If process_3D is True, the hyperplanes will also include an additional log(conc) term.
 
         The interior point is a point inside the stable domain.
+
+        Args:
+            process_3D: whether we are processing a 3D Pourbaix diagram
 
         Returns:
             dictionary of hyperplanes and interior points for each stable domain.
         """
         hyperplanes = {}
-        for entry, vertices in self.ref_pbx.stable_vertices.items():
+        stable_vertices = self.ref_pbx.stable_3D_vertices if process_3D else self.ref_pbx.stable_vertices
+        for entry, vertices in stable_vertices.items():
+            if process_3D:
+                entry_hyperplanes = self._construct_3D_entry_hyperplanes(entry)
+                border_hyperplanes, interior_point = self._construct_3D_border_hyperplanes_and_interior_point(
+                    vertices, entry_hyperplanes
+                )
+            else:
             entry_hyperplanes = self._construct_entry_hyperplanes(entry)
             border_hyperplanes, interior_point = self._construct_border_hyperplanes_and_interior_point(
                 vertices, entry_hyperplanes
@@ -1788,33 +1790,6 @@ class SurfacePourbaixDiagram(MSONable):
             }
             logger.debug("Entry: %s, Hyperplanes: %s", entry, hyperplanes[entry]["hyperplanes"])
             logger.debug("vertices: %s", vertices)
-        return hyperplanes
-
-    def construct_3D_hyperplanes(self) -> dict[PourbaixEntry, dict[str, np.ndarray]]:
-        """Construct the hyperplanes and obtain an interior point for each stable domain.
-
-        Each hyperplane represents an inequality of the form a*pH + b*V + c*log(conc) + d*z - g(0, 0) <= 0 in the pH-V-
-        log(conc)-z space, where z represents an additional dimension that allows the energy to vary with pH and V.
-        The hyperplanes enclose the stable domain.
-
-        The interior point is a point inside the stable domain.
-
-        Returns:
-            dictionary of hyperplanes and interior points for each stable domain.
-        """
-        hyperplanes = {}
-        for entry, vertices in self.ref_pbx.stable_3D_vertices.items():
-            entry_hyperplanes = self._construct_3D_entry_hyperplanes(entry)
-            border_hyperplanes, interior_point = self._construct_3D_border_hyperplanes_and_interior_point(
-                vertices, entry_hyperplanes
-            )
-            hyperplanes[entry] = {
-                "hyperplanes": np.vstack([entry_hyperplanes, border_hyperplanes]),
-                "interior_point": interior_point,
-            }
-            logger.debug("Entry: %s, Hyperplanes: %s", entry, hyperplanes[entry]["hyperplanes"])
-            logger.debug("vertices: %s", vertices)
-
         return hyperplanes
 
     # TODO: move to PourbaixDiagram
@@ -1931,23 +1906,18 @@ class SurfacePourbaixDiagram(MSONable):
         # TODO make it contain more information about the surface for disambiguation
         # create fake Pourbaix entries for each region to be compatible with PourbaixDiagram
         for k, v_simplex in merged_stable_domains.items():
-            merged_stable_domains[k] = v_simplex
+            merged_stable_domains[k] = list(set(v_simplex))
             v_vertices = merged_stable_domain_vertices[k]
             merged_stable_domain_vertices[k] = np.unique(
                 np.array(v_vertices).round(decimals=3),
                 axis=0,  # round to avoid numerical errors
             )
-        # merged_stable_domains = {PourbaixEntry(k): v for k, v in merged_stable_domains.items()}
-        # merged_stable_domain_vertices = {
-        #     PourbaixEntry(k): np.unique(np.array(v).round(decimals=3), axis=0)  # round to avoid numerical errors
-        #     for k, v in merged_stable_domain_vertices.items()
-        # }
+
         merged_stable_sorted_vertices = {}
 
         # General idea: for overlapping points between different entries, keep them
         # For remaining points, do convex hull to remove interior points, and then add back the overlapping points
 
-        # Collate all points, round to 3 decimal places to avoid numerical errors
         # Might not be useful for the 3D case
         all_points = np.concatenate(list(merged_stable_domain_vertices.values())).round(decimals=3)
         all_points = np.array(all_points)[:, :3] if process_3D else np.array(all_points)[:, :2]
@@ -1964,15 +1934,16 @@ class SurfacePourbaixDiagram(MSONable):
                 np.isclose(sorted_points[:, None, :], overlapping_points[None, :, :], atol=1e-3).all(-1).any(-1)
             )[0]
 
-            # Placeholder for merged stable domains
-            merged_stable_domains[entry] = []
-            # merged_stable_domains[entry] = [Simplex(sorted_points[indices]) for indices in hull.simplices]
-
             hull = ConvexHull(sorted_points)  # convex hull to remove interior points
             # Combine the convex hull vertices with the overlapping points
             combined_idx = np.unique(sorted(overlapping_indices.tolist() + hull.vertices.tolist()))
             # Rearrange the indices again for plotting
             merged_stable_sorted_vertices[entry] = self._sort_pourbaix_domain_vertices(sorted_points[combined_idx])
+
+            # Placeholder for merged stable domains
+            # # TODO: can try to fix this and use this to plot the non-overlapping regions instead
+            # hull = ConvexHull(sorted_points[combined_idx])  # convex hull to remove interior points
+            # merged_stable_domains[entry] = [Simplex(sorted_points[indices]) for indices in hull.simplices]
 
         return merged_stable_domains, merged_stable_sorted_vertices
 
