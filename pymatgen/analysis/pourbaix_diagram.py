@@ -1267,9 +1267,22 @@ class PourbaixDiagram(MSONable):
         pourbaix_domain_vertices = {}
 
         for entry, points in pourbaix_domains.items():
-            points = np.array(points)[:, :3]
+            points_3d = np.array(points)[:, :3]
             # Initial sort to ensure consistency
-            points = points[np.lexsort(np.transpose(points))]
+            points_3d = points_3d[np.lexsort(np.transpose(points_3d))]
+
+            points_2d, _v, w = simple_pca(points_3d, k=2)
+            domain = ConvexHull(points_2d)
+            centroid_2d = get_centroid_2d(points_2d[domain.vertices])
+            ann_loc = centroid_2d @ w.T + np.mean(points_3d.T, axis=1)
+
+            if at_equilibrium:
+                simplices = [Simplex(points_3d[indices]) for indices in domain.simplices]
+                vertices = points_3d[domain.vertices]  # ordered in 2D space
+            else:
+                simplices = [Simplex(points_3d[indices]) for indices in ConvexHull(points_3d).simplices]
+                vertices = points_3d
+
             # center = np.mean(points, axis=0)
             # points_centered = points - center
 
@@ -1280,9 +1293,8 @@ class PourbaixDiagram(MSONable):
             # points = points_centered + center
 
             # Create simplices corresponding to Pourbaix boundary
-            simplices = [Simplex(points[indices]) for indices in ConvexHull(points).simplices]
             pourbaix_domains[entry] = simplices
-            pourbaix_domain_vertices[entry] = points
+            pourbaix_domain_vertices[entry] = vertices
 
         return pourbaix_domains, pourbaix_domain_vertices
 
