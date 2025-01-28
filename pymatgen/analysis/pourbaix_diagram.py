@@ -1916,28 +1916,35 @@ class SurfacePourbaixDiagram(MSONable):
                 merged_stable_domain_vertices[surf_pbx_entry.entry] += vertices.tolist()
 
         # TODO make it contain more information about the surface for disambiguation
-        # create fake Pourbaix entries for each region to be compatible with PourbaixDiagram
+        merged_pbx_stable_domains = {}
+        merged_pbx_stable_domain_vertices = {}
         for k, v_simplex in merged_stable_domains.items():
-            merged_stable_domains[k] = list(set(v_simplex))
+            pbx_entry = PourbaixEntry(k)
+            # merged_stable_domains[k] = list(set(v_simplex))
+            merged_pbx_stable_domains[pbx_entry] = list(set(v_simplex))
             v_vertices = merged_stable_domain_vertices[k]
-            merged_stable_domain_vertices[k] = np.unique(
+            merged_pbx_stable_domain_vertices[pbx_entry] = np.unique(
                 np.array(v_vertices).round(decimals=3),
                 axis=0,  # round to avoid numerical errors
             )
 
-        merged_stable_sorted_vertices = {}
+        # Create fake Pourbaix entries for each region to be compatible with PourbaixDiagram
+        # merged_stable_domains = {PourbaixEntry(k): v for k, v in merged_stable_domains.items()}
+        # merged_stable_domain_vertices = {PourbaixEntry(k): v for k, v in merged_stable_domain_vertices.items()}
+
+        merged_pbx_stable_sorted_vertices = {}
 
         # General idea: for overlapping points between different entries, keep them
         # For remaining points, do convex hull to remove interior points, and then add back the overlapping points
 
         # Might not be useful for the 3D case
-        all_points = np.concatenate(list(merged_stable_domain_vertices.values())).round(decimals=3)
+        all_points = np.concatenate(list(merged_pbx_stable_domain_vertices.values())).round(decimals=3)
         all_points = np.array(all_points)[:, :3] if process_3D else np.array(all_points)[:, :2]
         all_points = self._sort_pourbaix_domain_vertices(all_points)
         unique_points, counts = np.unique(all_points, return_counts=True, axis=0)
         overlapping_points = unique_points[counts > 1]
 
-        for entry, points in merged_stable_domain_vertices.items():
+        for entry, points in merged_pbx_stable_domain_vertices.items():
             points = np.array(points)[:, :3] if process_3D else np.array(points)[:, :2]
             sorted_points = np.unique(self._sort_pourbaix_domain_vertices(points).round(decimals=3), axis=0)
 
@@ -1950,14 +1957,14 @@ class SurfacePourbaixDiagram(MSONable):
             # Combine the convex hull vertices with the overlapping points
             combined_idx = np.unique(sorted(overlapping_indices.tolist() + hull.vertices.tolist()))
             # Rearrange the indices again for plotting
-            merged_stable_sorted_vertices[entry] = self._sort_pourbaix_domain_vertices(sorted_points[combined_idx])
+            merged_pbx_stable_sorted_vertices[entry] = self._sort_pourbaix_domain_vertices(sorted_points[combined_idx])
 
             # Placeholder for merged stable domains
             # # TODO: can try to fix this and use this to plot the non-overlapping regions instead
             # hull = ConvexHull(sorted_points[combined_idx])  # convex hull to remove interior points
-            # merged_stable_domains[entry] = [Simplex(sorted_points[indices]) for indices in hull.simplices]
+            # merged_pbx_stable_domains[entry] = [Simplex(sorted_points[indices]) for indices in hull.simplices]
 
-        return merged_stable_domains, merged_stable_sorted_vertices
+        return merged_pbx_stable_domains, merged_pbx_stable_sorted_vertices
 
     def get_all_entries_at_conditions(
         self,
