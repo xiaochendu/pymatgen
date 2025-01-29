@@ -2484,22 +2484,31 @@ class PourbaixPlotter:
         return self._pbx._stable_domain_vertices[entry]
 
 
-def generate_entry_label(entry, full_formula=False):
+def generate_entry_label(entry, full_formula: bool = False, style: Literal["latex", "html"] = "latex") -> str:
     """
     Generates a label for the Pourbaix plotter.
 
     Args:
         entry (PourbaixEntry or MultiEntry): entry to get a label for
         full_formula (bool): whether to use full formula
+        style (str): style of the label
+
+    Returns:
+        str: label for the entry
     """
     if isinstance(entry, MultiEntry):
         sorted_entry_list = sorted(entry.entry_list, key=lambda x: x.name)
-        return " + ".join(generate_entry_label(sub_entry, full_formula) for sub_entry in sorted_entry_list)
+        return " + ".join(
+            generate_entry_label(sub_entry, full_formula=full_formula, style=style) for sub_entry in sorted_entry_list
+        )
 
     # TODO - a more elegant solution could be added later to Stringify
     # for example, the pattern re.sub(r"([-+][\d\.]*)", r"$^{\1}$", )
     # will convert B(OH)4- to B(OH)$_4^-$.
     # for this to work, the ion's charge always must be written AFTER
     # the sign (e.g., Fe+2 not Fe2+)
+    if style == "html":
+        string = entry.to_html_string(full_formula=full_formula)
+        return re.sub(r"()\[([^)]*)\]", r"\1<sup>\2</sup>", string)  # replace [ with <sup> for superscript
     string = entry.to_latex_string(full_formula=full_formula)
-    return re.sub(r"()\[([^)]*)\]", r"\1$^{\2}$", string)
+    return re.sub(r"()\[([^)]*)\]", r"\1$^{\2}$", string)  # replace [ with ^{ for superscript
