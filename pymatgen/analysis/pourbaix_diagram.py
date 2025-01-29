@@ -13,7 +13,7 @@ from collections import defaultdict
 from copy import deepcopy
 from functools import cmp_to_key, partial
 from multiprocessing import Pool
-from typing import TYPE_CHECKING, Dict, Iterable, List, Optional, Tuple, Union, no_type_check
+from typing import TYPE_CHECKING, Dict, Iterable, List, Literal, Optional, Tuple, Union, no_type_check
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -22,6 +22,7 @@ from monty.json import MontyDecoder, MSONable
 from scipy.spatial import ConvexHull, HalfspaceIntersection
 from scipy.special import comb
 
+from pymatgen.analysis.chempot_diagram import get_centroid_2d, simple_pca
 from pymatgen.analysis.phase_diagram import PDEntry, PhaseDiagram
 from pymatgen.analysis.reaction_calculator import Reaction, ReactionError
 from pymatgen.core import Composition, Element
@@ -856,7 +857,8 @@ class PourbaixDiagram(MSONable):
 
         if process_3D:
             self._stable_3D_domains, self._stable_3D_domain_vertices = self.get_3D_pourbaix_domains(
-                self._processed_entries, limits=[pH_limits, phi_limits, lg_conc_limits]
+                self._processed_entries,
+                limits=[pH_limits, phi_limits, lg_conc_limits],
         )
 
     def _convert_entries_to_points(self, pourbaix_entries):
@@ -1149,8 +1151,6 @@ class PourbaixDiagram(MSONable):
         return pourbaix_domains, pourbaix_domain_vertices
 
     @staticmethod
-
-    @staticmethod
     def get_3D_pourbaix_domains(
         pourbaix_entries: list[PourbaixEntry],
         limits: list[list[float]] | None = None,
@@ -1225,7 +1225,7 @@ class PourbaixDiagram(MSONable):
                         -PREFAC * ref_pbx_entry.n_conc,
                         0,
                         -(
-                            ref_pbx_entry.energy_without_conc_term - 1e-3
+                            ref_pbx_entry.energy_without_conc_term - 1e-3  # can't go thicker than this
                         ),  # add a small offset to avoid numerical issues
                     ]
                 )
@@ -1233,7 +1233,6 @@ class PourbaixDiagram(MSONable):
             )
             ref_pbx_hyperplane[-2] = -1
             hyperplanes = np.vstack([hyperplanes, ref_pbx_hyperplane])
-
         g_max = PourbaixDiagram.get_min_energy(limits, hyperplanes)
 
         # Add border hyperplanes and generate HalfspaceIntersection
@@ -1481,14 +1480,18 @@ class SurfacePourbaixDiagram(MSONable):
         reference_pourbaix_diagram: PourbaixDiagram,
         reference_surface_entry_factor: float = 1.0,
         reference_elements: Optional[Iterable[str]] = None,
+        excluded_bulk_entries: Optional[Iterable[PourbaixEntry]] = None,
         process_3D: bool = False,
+        at_equilibrium: bool = False,
     ) -> None:
         """
         Args:
             surface_entries: list of ComputedEntry's with surface energies
             reference_surface_entry: ComputedEntry for the reference surface
             reference_pourbaix_diagram: PourbaixDiagram for the bulk phase
+            reference_surface_entry_factor: factor to scale the reference surface entry energy
             reference_elements: elements to be considered as reference in the surface Pourbaix diagram
+            excluded_bulk_entries: list of bulk Pourbaix domains to exclude from the surface Pourbaix diagram
             process_3D: whether to process the 3D Pourbaix diagram
         """
         self.surface_entries = surface_entries  # with surface formation energies
@@ -1499,27 +1502,40 @@ class SurfacePourbaixDiagram(MSONable):
 
         # Create 3D Pourbaix diagram in pH-V-log(conc) space
         if process_3D:
-            # Assume we have already constructed the 3D bulk Pourbaix diagram
+            # Assumes we have already constructed the 3D bulk Pourbaix diagram
             try:
                 getattr(self.ref_pbx, "stable_3D_entries"), getattr(self.ref_pbx, "stable_3D_vertices")
             except AttributeError:
-                self.ref_pbx.stable_3D_entries, self.ref_pbx.stable_3D_vertices = self.ref_pbx.get_3D_pourbaix_domains(
-                    self.ref_pbx.all_entries
+                raise AttributeError(
+                    "3D Pourbaix diagram not found. Please run get_3D_pourbaix_domains() on the reference Pourbaix diagram and set stable_3D_entries and stable_3D_vertices."
                 )
+                # self.ref_pbx.stable_3D_entries, self.ref_pbx.stable_3D_vertices = self.ref_pbx.get_3D_pourbaix_domains(
+                #     self.ref_pbx.all_entries
+                # )
+            # Remove any excluded bulk entries
+            if excluded_bulk_entries is not None:
+                for entry in excluded_bulk_entries:
+                    self.ref_pbx._stable_3D_domains.pop(entry, None)
+                    self.ref_pbx._stable_3D_domain_vertices.pop(entry, None)
+
             # Step 1: create SurfacePourbaixEntry's for each region
             self.ind_3D_surface_pbx_entries = self.construct_surf_pbx_entries(process_3D=True)
 
             # Step 2: construct individual hyperplanes for each region
-            self.ind_3D_hyperplanes = self.construct_hyperplanes(process_3D=True)
+            self.ind_3D_hyperplanes = self.construct_hyperplanes(
+                process_3D=True, at_equilibrium=at_equilibrium
+            )  # at eq not useful
 
             # Step 3: construct Pourbaix domains for each region
             self.ind_3D_stable_domains, self.ind_3D_stable_domain_vertices = self.construct_pourbaix_domains(
-                process_3D=True
-            )
+                process_3D=True, at_equilibrium=at_equilibrium
+            )  # at eq not useful
 
             # Step 4: construct overall Pourbaix domains
             # styling compatible with PourbaixDiagram class
-            self._stable_3D_domains, self._stable_3D_domain_vertices = self.merge_pourbaix_domains(process_3D=True)
+            self._stable_3D_domains, self._stable_3D_domain_vertices = self.merge_pourbaix_domains(
+                process_3D=True, at_equilibrium=at_equilibrium
+            )
 
         # Create regular Pourbaix diagram in pH-V space
         else:
@@ -1701,11 +1717,16 @@ class SurfacePourbaixDiagram(MSONable):
         return hyperplanes
 
     # 3D surface Pourbaix diagram case
-    def _construct_3D_entry_hyperplanes(self, domain: PourbaixEntry) -> np.ndarray:
+    def _construct_3D_entry_hyperplanes(
+        self, domain: PourbaixEntry, at_equilibrium: bool = False, vertices: np.ndarray | None = None
+    ) -> np.ndarray:
         """Construct the entry hyperplanes for each stable domain, with additional log(conc) term.
 
         Args:
             domain: Stable domain for which to construct the hyperplanes.
+            at_equilibrium (bool): whether to calculate the Pourbaix diagram at equilibrium
+                conditions or not. Default is False.
+            vertices: Boundaries in the pH-V-log(conc) space of the stable domain. Default is None.
 
         Returns:
             np.ndarray of surface Pourbaix entry-based hyperplanes for the domain.
@@ -1719,6 +1740,49 @@ class SurfacePourbaixDiagram(MSONable):
             ]
         )
         hyperplanes[:, -2] = 1
+
+        # NOTE: not needed anymore, but keeping the code here for reference
+        # # For each individual bulk domain, do PCA on vertices to find the equation of the 2D plane corresponding to the
+        # # pH-V-log(conc) equilibrium condition
+        # if at_equilibrium:
+        #     if vertices is None:
+        #         raise ValueError("Vertices not provided for equilibrium condition")
+
+        #     # Find equation of the plane in 3D space to express lg(conc) as a function of pH and V
+        #     _points, _v, w = simple_pca(vertices, k=3)
+        #     normal_vec = w[:, 2]  # get the normal vector of the projected (2D) plane
+        #     point_on_plane = np.mean(vertices, axis=0)
+
+        #     # Equation of the plane: a*pH + b*V + c*lg(conc) + g = 0
+        #     a, b, c, g = normal_vec[0], normal_vec[1], normal_vec[2], -np.dot(normal_vec, point_on_plane)
+
+        #     # We will need to create another hyperplane slightly shifted to constrain the Pourbaix diagram
+        #     # Determine which side the equilibrium plane is facing (normal vector)
+        #     signed_distance = -g / np.linalg.norm(
+        #         normal_vec
+        #     )  # find - d / sqrt(a^2 + b^2 + c^2) to get the signed distance from the plane to the origin
+
+        #     if signed_distance < 0:
+        #         # We need to flip the plane to get it to face away from the origin
+        #         a, b, c, g = -a, -b, -c, -g
+        #         normal_vec = -normal_vec
+
+        #     shift_distance = 0.1  # Adjust this value as needed
+        #     # For the original plane, we shift it back by a small amount
+        #     back_shifted_point = point_on_plane - shift_distance * normal_vec
+        #     g_back_shifted = -np.dot(normal_vec, back_shifted_point)
+
+        #     # Insert back shifted hyperplane of the form z <= a*pH + b*V + c*lg(conc) + g_back_shifted
+        #     hyperplanes = np.vstack([hyperplanes, [-a, -b, -c, 1, -g_back_shifted]])
+
+        #     # Create a new forward shifted hyperplane
+        #     forward_shifted_point = point_on_plane + shift_distance * normal_vec
+        #     g_forward_shifted = -np.dot(normal_vec, forward_shifted_point)
+
+        #     # Insert forward shifted hyperplane of the form z >= a*pH + b*V + c*lg(conc) + g_forward_shifted
+        #     hyperplanes = np.vstack([hyperplanes, [a, b, c, -1, g_forward_shifted]])
+
+        #     # TODO: Write test cases here
         return hyperplanes
 
     # 2D surface Pourbaix diagram case
@@ -1746,7 +1810,7 @@ class SurfacePourbaixDiagram(MSONable):
 
     # 3D surface Pourbaix diagram case
     def _construct_3D_border_hyperplanes_and_interior_point(
-        self, vertices: np.ndarray, entry_hyperplanes: np.ndarray
+        self, vertices: np.ndarray, entry_hyperplanes: np.ndarray, at_equilibrium: bool = False
     ) -> tuple[np.ndarray, np.ndarray]:
         """Construct the border hyperplanes with an additional log(conc) term and calculate an interior point for each
         stable domain.
@@ -1754,21 +1818,42 @@ class SurfacePourbaixDiagram(MSONable):
         Args:
             vertices: Boundaries in the pH-V-log(conc) space of the stable domain.
             entry_hyperplanes: Surface Pourbaix entry-based hyperplanes calculated for the domain.
+            at_equilibrium (bool): whether to calculate the Pourbaix diagram at equilibrium
 
         Returns:
             tuple of border hyperplanes and interior point for the domain.
         """
-        convex_hull = ConvexHull(vertices)
+        # if at_equilibrium:
+        convex_hull = ConvexHull(vertices, qhull_options="QJ")
+        # else:
+        #     convex_hull = ConvexHull(vertices)
         border_ineqs = np.insert(convex_hull.equations, -1, [0] * len(convex_hull.equations), axis=1)
         limits = np.vstack([np.min(vertices, axis=0), np.max(vertices, axis=0)]).T
         g_max = PourbaixDiagram.get_min_energy(limits, entry_hyperplanes)
         lower_bound_ineq = [0, 0, 0, -1, 2 * g_max]
         border_hyperplanes = np.vstack([border_ineqs, [lower_bound_ineq]])
         interior_point = np.array([*np.mean(vertices, axis=0).tolist(), g_max])
+        # NOTE: not needed anymore, but keeping the code here for reference
+        # # For the at equilibrium case, we can project the interior_point onto the equilibrium plane
+        # # To do this, we need to find the normal vector of the plane and the point on the plane
+        # if at_equilibrium:
+        #     # Find equation of the plane in 3D space to express lg(conc) as a function of pH and V
+        #     _points, _v, w = simple_pca(vertices, k=3)
+        #     normal_vec = w[:, 2]  # get the normal vector of the projected (2D) plane
+        #     point_on_plane = np.mean(vertices, axis=0)
+        #     breakpoint()
+        #     dx = interior_point[:2] - point_on_plane[:2]
+
+        #     # Project the interior point onto the plane
+        #     interior_point[:2] = point_on_plane[:2] + np.dot(dx, normal_vec[:2]) * normal_vec[:2]
         return border_hyperplanes, interior_point
 
     # Both 2D and 3D surface Pourbaix diagram case
-    def construct_hyperplanes(self, process_3D: bool = False) -> dict[PourbaixEntry, dict[str, np.ndarray]]:
+    def construct_hyperplanes(
+        self,
+        process_3D: bool = False,
+        at_equilibrium: bool = False,
+    ) -> dict[PourbaixEntry, dict[str, np.ndarray]]:
         """Construct the hyperplanes and obtain an interior point for each stable domain.
 
         Each hyperplane represents an inequality of the form a*pH + b*V + c*z - g(0, 0) <= 0 in the pH-V-z space,
@@ -1778,7 +1863,9 @@ class SurfacePourbaixDiagram(MSONable):
         The interior point is a point inside the stable domain.
 
         Args:
-            process_3D: whether we are processing a 3D Pourbaix diagram
+            process_3D (bool): whether we are processing a 3D Pourbaix diagram. Default is False.
+            at_equilibrium (bool): whether to calculate the Pourbaix diagram at equilibrium
+                conditions. Default is False.
 
         Returns:
             dictionary of hyperplanes and interior points for each stable domain.
@@ -1787,10 +1874,23 @@ class SurfacePourbaixDiagram(MSONable):
         stable_vertices = self.ref_pbx.stable_3D_vertices if process_3D else self.ref_pbx.stable_vertices
         for entry, vertices in stable_vertices.items():
             if process_3D:
-                entry_hyperplanes = self._construct_3D_entry_hyperplanes(entry)
-                border_hyperplanes, interior_point = self._construct_3D_border_hyperplanes_and_interior_point(
-                    vertices, entry_hyperplanes
+                entry_hyperplanes = self._construct_3D_entry_hyperplanes(
+                    entry, at_equilibrium=at_equilibrium, vertices=vertices
                 )
+                border_hyperplanes, interior_point = self._construct_3D_border_hyperplanes_and_interior_point(
+                    vertices, entry_hyperplanes, at_equilibrium=at_equilibrium
+                )
+                # NOTE: not needed anymore, but keeping the code here for reference
+                # if at_equilibrium:
+                #     # Edit the g (last index) of the interior point to be within the equilibrium planes
+                #     point_on_plane = np.mean(vertices, axis=0)
+                #     plane_1, plane_2 = entry_hyperplanes[-2], entry_hyperplanes[-1]
+                #     plane_1 = -plane_1 if int(plane_1[3]) == 1 else plane_1
+                #     plane_2 = -plane_2 if int(plane_2[3]) == 1 else plane_2
+                #     avg_plane = np.mean(np.stack([plane_1, plane_2]), axis=0)
+                #     # Get energy = a*pH + b*V + c*lg(conc) + g
+                #     coeffs = np.delete(avg_plane, -2)
+                #     interior_point[-1] = coeffs.dot(np.append(point_on_plane, [1]))  # right now, the solution is just 0
             else:
             entry_hyperplanes = self._construct_entry_hyperplanes(entry)
             border_hyperplanes, interior_point = self._construct_border_hyperplanes_and_interior_point(
@@ -1828,7 +1928,11 @@ class SurfacePourbaixDiagram(MSONable):
 
     # Both 2D and 3D surface Pourbaix diagram case
     def _get_pourbaix_domains_ind(
-        self, domain: PourbaixEntry, halfspace_int: HalfspaceIntersection, process_3D: bool = False
+        self,
+        domain: PourbaixEntry,
+        halfspace_int: HalfspaceIntersection,
+        process_3D: bool = False,
+        at_equilibrium: bool = False,
     ) -> tuple[dict, dict]:
         """
         Construct and sort the surface Pourbaix domains for an original stable domain.
@@ -1837,6 +1941,7 @@ class SurfacePourbaixDiagram(MSONable):
             domain: Stable domain for which to obtain surface Pourbaix entries.
             halfspace_int: HalfspaceIntersection object for the domain.
             process_3D: whether we are processing a 3D Pourbaix diagram
+            at_equilibrium (bool): whether to calculate the Pourbaix diagram at equilibrium
 
         Returns:
             dictionary of Pourbaix domains of Simplex objects and dictionary of sorted vertices for
@@ -1860,6 +1965,17 @@ class SurfacePourbaixDiagram(MSONable):
             points = np.array(points)[:, :3] if process_3D else np.array(points)[:, :2]
             # Sorting might not be important for the 3D case
             sorted_points = self._sort_pourbaix_domain_vertices(points)
+
+            if process_3D and at_equilibrium:
+                points_2d, _v, w = simple_pca(sorted_points, k=2)
+                domain = ConvexHull(points_2d)
+                centroid_2d = get_centroid_2d(points_2d[domain.vertices])
+                ann_loc = centroid_2d @ w.T + np.mean(sorted_points.T, axis=1)
+                simplices = [Simplex(sorted_points[indices]) for indices in domain.simplices]
+                vertices = sorted_points[domain.vertices]  # ordered in 2D space
+                pourbaix_domains[entry] = simplices
+                pourbaix_domain_sorted_vertices[entry] = vertices
+            else:
             pourbaix_domains[entry] = [
                 Simplex(sorted_points[indices])
                 for indices in ConvexHull(sorted_points).simplices  # convex hull only to get simplices
@@ -1868,11 +1984,12 @@ class SurfacePourbaixDiagram(MSONable):
         return pourbaix_domains, pourbaix_domain_sorted_vertices
 
     # Both 2D and 3D surface Pourbaix diagram case
-    def construct_pourbaix_domains(self, process_3D: bool = False) -> tuple[dict, dict]:
+    def construct_pourbaix_domains(self, process_3D: bool = False, at_equilibrium: bool = False) -> tuple[dict, dict]:
         """Obtain the surface Pourbaix domains for each original stable domain.
 
         Args:
             process_3D: whether we are processing a 3D Pourbaix diagram
+            at_equilibrium (bool): whether to calculate the Pourbaix diagram at equilibrium
 
         Returns:
             dictionary of Pourbaix domains of Simplex objects and dictionary of sorted vertices for each domain.
@@ -1886,18 +2003,19 @@ class SurfacePourbaixDiagram(MSONable):
             interior_point = hyperplane_info["interior_point"]
             hs_int = HalfspaceIntersection(hyperplanes, interior_point)
             pourbaix_domains, pourbaix_domain_vertices = self._get_pourbaix_domains_ind(
-                entry, hs_int, process_3D=process_3D
+                entry, hs_int, process_3D=process_3D, at_equilibrium=at_equilibrium
             )
             stable_domains[entry] = pourbaix_domains
             stable_domain_vertices[entry] = pourbaix_domain_vertices
         return stable_domains, stable_domain_vertices
 
     # Both 2D and 3D surface Pourbaix diagram case
-    def merge_pourbaix_domains(self, process_3D: bool = False) -> tuple[dict, dict]:
+    def merge_pourbaix_domains(self, process_3D: bool = False, at_equilibrium: bool = False) -> tuple[dict, dict]:
         """Construct the overall Pourbaix domains across all original stable domains.
 
         Args:
             process_3D: whether we are processing a 3D Pourbaix diagram
+            at_equilibrium (bool): whether to calculate the Pourbaix diagram at equilibrium
 
         Returns:
             dictionary of Pourbaix domains of Simplex objects and dictionary of sorted vertices.
@@ -1958,11 +2076,6 @@ class SurfacePourbaixDiagram(MSONable):
             combined_idx = np.unique(sorted(overlapping_indices.tolist() + hull.vertices.tolist()))
             # Rearrange the indices again for plotting
             merged_pbx_stable_sorted_vertices[entry] = self._sort_pourbaix_domain_vertices(sorted_points[combined_idx])
-
-            # Placeholder for merged stable domains
-            # # TODO: can try to fix this and use this to plot the non-overlapping regions instead
-            # hull = ConvexHull(sorted_points[combined_idx])  # convex hull to remove interior points
-            # merged_pbx_stable_domains[entry] = [Simplex(sorted_points[indices]) for indices in hull.simplices]
 
         return merged_pbx_stable_domains, merged_pbx_stable_sorted_vertices
 
