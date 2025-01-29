@@ -54,9 +54,10 @@ class Stringify:
             return re.sub(r"([A-Za-z\(\)])([\d\+\-\.]+)", r"\1$_{\2}$", str_)
         if self.STRING_MODE == "SUPERSCRIPT":
             return re.sub(r"([A-Za-z\(\)])([\d\+\-\.]+)", r"\1$^{\2}$", str_)
+
         return str_
 
-    def to_html_string(self) -> str:
+    def to_html_string(self, full_formula=False) -> str:
         """Generate a HTML formatted string. This uses the output from to_latex_string to generate a HTML output.
 
         Returns:
@@ -134,7 +135,7 @@ def charge_string(charge, brackets=True, explicit_one=True):
         explicit_one: whether to include the number one for monovalent ions, e.g.
             +1 rather than +. Default: True
     """
-    chg_str = "(aq)" if charge == 0 else f"{formula_double_format(charge, ignore_ones= False):+}"
+    chg_str = "(aq)" if charge == 0 else f"{formula_double_format(charge, ignore_ones=False):+}"
 
     if chg_str in ["+1", "-1"] and not explicit_one:
         chg_str = chg_str.replace("1", "")
