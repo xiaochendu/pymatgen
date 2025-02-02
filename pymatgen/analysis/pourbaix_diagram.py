@@ -2180,6 +2180,7 @@ class PourbaixPlotter:
         show_water_lines: bool = True,
         show_neutral_axes: bool = True,
         cmap: str | Colormap = "RdYlBu_r",
+        cmap_values: dict[str, float] | None = None,
         ax: plt.Axes = None,
         lw: int = 2,
         full_formula: bool = False,
@@ -2198,6 +2199,7 @@ class PourbaixPlotter:
             show_neutral_axes; whether to show dashed horizontal and vertical lines
                 at 0 V and pH 7, respectively.
             cmap (str or Colormap): colormap for Pourbaix diagram
+            cmap_values (dict): dictionary of values to use for colormap
             ax (Axes): Matplotlib Axes instance for plotting
             lw (int): Line width for each Pourbaix domain
             full_formula (bool): Whether to display full formula for each entry
@@ -2242,12 +2244,15 @@ class PourbaixPlotter:
             x, y = np.transpose(np.vstack([vertices, vertices[0]]))
             ax.plot(x, y, "k-", linewidth=lw)
 
+            if cmap_values is not None:
+                cmap_value = cmap_values[entry.entry_id]
+            else:
             # Use reduced formula to index a number for the color
             cmap_value = (np.sum([ord(c) for c in entry.composition.reduced_formula]) % 128) / 128
 
             # normalized_dist_origin = np.linalg.norm(center) / np.linalg.norm([xlim[1], ylim[1]])
             # normalized_dist_center = np.linalg.norm(center - np.mean(limits)) / np.linalg.norm(limits)
-            ax.fill(x, y, alpha=0.5, color=cmap(cmap_value))
+            ax.fill(x, y, alpha=0.75, color=cmap(cmap_value))
 
             if label_domains:
                 ax.annotate(
@@ -2325,6 +2330,8 @@ class PourbaixPlotter:
         highlight_subset_entries: bool = False,
         V_range: tuple[float, float] = (-1, 2),
         V_resolution: int = 100,
+        cmap: str = "RdYlBu_r",
+        cmap_values: dict[str, float] = None,
         ax=None,
         lw=2,
         full_formula=False,
@@ -2333,6 +2340,8 @@ class PourbaixPlotter:
         label_domain_center: float = 0.5,
         label_domain_positions: dict[str, float] = None,
         label_stable_bulk: bool = True,
+        color_stable_bulk: bool = True,
+        bulk_cmap_values: dict[str, float] = None,
     ) -> plt.Axes:
         """Get the energy of an entry at a given pH as a function of potential.
 
@@ -2345,6 +2354,8 @@ class PourbaixPlotter:
             highlight_subset_entries: whether to highlight the subset entries
             V_range (tuple[float, float], optional): Voltage range for the plot. Defaults to (-3, 3).
             V_resolution (int, optional): Voltage resolution. Defaults to 100.
+            cmap (str, optional): Colormap for the plot. Defaults to "RdYlBu_r".
+            cmap_values (dict[str, float], optional): Dictionary of values to use for colormap. Defaults to None.
             ax (Axes, optional): Existing matplotlib Axes object for plotting. Defaults to None.
             lw (int, optional): Line width for the plot. Defaults to 2.
             full_formula (bool, optional): Whether to use full formula for the entry. Defaults to False.
@@ -2353,11 +2364,16 @@ class PourbaixPlotter:
             label_domain_center (float, optional): Center for the domain labels. Defaults to 0.5.
             label_domain_positions (dict[str, float], optional): Positions for the domain labels. Defaults to None.
             label_stable_bulk (bool, optional): Whether to label the stable bulk. Defaults to True
+            color_stable_bulk (bool, optional): Whether to color the stable bulk. Defaults to True
+            bulk_cmap_values (dict[str, float], optional): Dictionary of values to use for colormap for the stable bulk.
 
         Returns:
             plt.Axes: Matplotlib Axes object with the energy plot
         """
         ax = ax or pretty_plot(16)
+
+        if isinstance(cmap, str):
+            cmap = plt.get_cmap(cmap)
 
         all_Vs = np.linspace(V_range[0], V_range[1], V_resolution)
         all_energies = defaultdict(list)
@@ -2379,6 +2395,7 @@ class PourbaixPlotter:
             all_stable_bulks_for_range.append(stable_entry)
             for entry, energy in curr_all_energies.items():
                 all_energies[entry].append(energy)
+
         # Plot all entry with energies
         # Sort the entries by label
         for i, (entry, energies) in enumerate(all_energies.items()):
@@ -2387,13 +2404,18 @@ class PourbaixPlotter:
             if highlight_subset_entries and entry.entry_id not in subset_entry_ids:
                 ax.plot(all_Vs, energies, color="gray", linewidth=lw / 2, alpha=0.2)
             else:
+                if cmap_values is not None:
+                    cmap_value = cmap_values[entry.entry_id]
+                else:
+                    cmap_value = (np.sum([ord(c) for c in entry.composition.reduced_formula]) % 128) / 128
                 ax.plot(
                     all_Vs,
                     energies,
                     label=generate_entry_label(entry, full_formula=full_formula),
                     linewidth=lw,
-                    alpha=0.8,
+                    alpha=0.75,
                     zorder=5,
+                    color=cmap(cmap_value),
                 )
                 if label_domain_positions is not None and label_domain_positions.get(entry.entry_id) is not None:
                     center = label_domain_positions[entry.entry_id]
@@ -2414,28 +2436,36 @@ class PourbaixPlotter:
                     ).draggable()
 
         # Find the region for each stable bulk
-        if label_stable_bulk:
+        if color_stable_bulk:
             curr_stable_bulk = all_stable_bulks_for_range[0]
             prev_index = 0
             for i, stable_bulk in enumerate(all_stable_bulks_for_range):
+                if bulk_cmap_values is not None:
+                    bulk_cmap_value = bulk_cmap_values[curr_stable_bulk.entry_id]
+                else:
+                    bulk_cmap_value = (
+                        np.sum([ord(c) for c in curr_stable_bulk.composition.reduced_formula]) % 128
+                    ) / 128
                 if stable_bulk != curr_stable_bulk:
                     ax.fill_between(
-                        all_Vs[prev_index:i],
+                        all_Vs[prev_index : i + 1],
                         energy_range[0] if energy_range else min(energies),
                         energy_range[1] if energy_range else max(energies),
                         alpha=0.1,
+                        color=cmap(bulk_cmap_value),
                     )
                     # Annotate the stable bulk flipped 90 degrees counter-clockwise to the plot
                     center = (
                         all_Vs[(prev_index + i) // 2],
                         (energy_range[0] if energy_range else min(energies)) + 0.25,
                     )
+                    if label_stable_bulk:
                     ax.annotate(
                         generate_entry_label(curr_stable_bulk, full_formula=False),
                         center,
                         ha="center",
                         va="bottom",
-                        fontsize=0.9 * label_fontsize,
+                            fontsize=0.75 * label_fontsize,
                         color="k",
                         alpha=0.5,
                         rotation=90,
@@ -2443,22 +2473,28 @@ class PourbaixPlotter:
                     # Update the current stable bulk and the previous index
                     curr_stable_bulk = stable_bulk
                     prev_index = i
+            if bulk_cmap_values is not None:
+                bulk_cmap_value = bulk_cmap_values[curr_stable_bulk.entry_id]
+            else:
+                bulk_cmap_value = (np.sum([ord(c) for c in curr_stable_bulk.composition.reduced_formula]) % 128) / 128
             ax.fill_between(
                 all_Vs[prev_index:],
                 energy_range[0] if energy_range else min(energies),
                 energy_range[1] if energy_range else max(energies),
                 alpha=0.1,
+                color=cmap(bulk_cmap_value),
             )
             center = (
                 all_Vs[(prev_index + len(all_stable_bulks_for_range)) // 2],
                 (energy_range[0] if energy_range else min(energies)) + 0.25,
             )
+            if label_stable_bulk:
             ax.annotate(
                 generate_entry_label(curr_stable_bulk, full_formula=False),
                 center,
                 ha="right",
                 va="bottom",
-                fontsize=0.9 * label_fontsize,
+                    fontsize=0.75 * label_fontsize,
                 color="k",
                 alpha=0.5,
                 rotation=90,
