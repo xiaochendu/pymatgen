@@ -60,8 +60,8 @@ due.cite(
     description="Electrochemical Stability of Metastable Materials",
 )
 due.cite(
-    Doi("10.1021/acs.chemmater.7b03980"),
-    description="Fast computation of many-element Pourbaix diagrams",
+    Doi("10.1039/C9CP04799A"),
+    description="Efficient Pourbaix diagrams of many-element compounds",
 )
 
 logger = logging.getLogger(__name__)
