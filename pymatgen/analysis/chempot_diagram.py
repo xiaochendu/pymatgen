@@ -224,7 +224,8 @@ class ChemicalPotentialDiagram(MSONable):
 
     def _get_border_hyperplanes(self) -> np.ndarray:
         """Get an array of the bounding hyperplanes given by elemental limits."""
-        border_hyperplanes = np.array([[0] * (self.dim + 1)] * (2 * self.dim))
+        border_hyperplanes = np.array([[0] * (self.dim + 1)] * (2 * self.dim), dtype=float)
+        # 2 * dim because there are 2 bounds for each element
 
         for idx, limit in enumerate(self.lims):
             border_hyperplanes[2 * idx, idx] = -1
@@ -433,7 +434,7 @@ class ChemicalPotentialDiagram(MSONable):
         ]
 
     @staticmethod
-    def _get_3d_domain_lines(domains: dict[str, list[Simplex] | None]) -> list[Scatter3d]:
+    def _get_3d_domain_lines(domains: dict[str, list[Simplex] | None], linewidth: float = 4.5) -> list[Scatter3d]:
         """Get a list of Scatter3d objects tracing the domain lines on a
         3-dimensional chemical potential diagram.
         """
@@ -451,7 +452,7 @@ class ChemicalPotentialDiagram(MSONable):
                 y=y,
                 z=z,
                 mode="lines",
-                line={"color": "black", "width": 4.5},
+                line={"color": "black", "width": linewidth},
                 showlegend=False,
             )
         ]
@@ -478,6 +479,7 @@ class ChemicalPotentialDiagram(MSONable):
     def _get_3d_formula_meshes(
         draw_domains: dict[str, np.ndarray],
         formula_colors: list[str] | None,
+        opacity: float = 0.13,
     ) -> list[Mesh3d]:
         """Get a list of Mesh3d objects for the domains specified by the
         user (i.e., draw_domains).
@@ -497,7 +499,7 @@ class ChemicalPotentialDiagram(MSONable):
                 lighting={"fresnel": 1.0},
                 color=formula_colors[idx],
                 name=f"{formula} (mesh)",
-                opacity=0.13,
+                opacity=opacity,
             )
             meshes.append(mesh)
         return meshes
@@ -555,11 +557,12 @@ class ChemicalPotentialDiagram(MSONable):
         return min_entries, el_refs
 
     @staticmethod
-    def _get_annotation(ann_loc: np.ndarray, formula: str) -> dict[str, str | float]:
+    def _get_annotation(ann_loc: np.ndarray, formula: str, fontsize: int = 12) -> dict[str, str | float]:
         """Get a Plotly annotation dict given a formula and location."""
         formula = htmlify(formula)
         annotation = plotly_layouts["default_annotation_layout"].copy()
         annotation.update({"x": ann_loc[0], "y": ann_loc[1], "text": formula})
+        annotation["font"]["size"] = fontsize
         if len(ann_loc) == 3:
             annotation["z"] = ann_loc[2]
         return annotation
