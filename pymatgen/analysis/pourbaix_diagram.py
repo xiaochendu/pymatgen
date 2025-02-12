@@ -367,6 +367,11 @@ class HydrogenPourbaixEntry(PourbaixEntry):
         """The number of electrons."""
         return self.npH
 
+    @property
+    def n_conc(self):
+        """The conc number used for 3D plots that vary concentration. Does not apply here."""
+        return 0
+
     # use the PourbaixEntry energy property since we've defined concentration as 1.0
     # @property
     # def energy(self):
@@ -459,7 +464,7 @@ class SurfacePourbaixEntry(PourbaixEntry):
     @property
     def n_conc(self):
         """The conc number used for 3D plots that vary concentration. Depends on the reference entries."""
-        return sum(
+        return -sum(
             self.entry.composition.get(element) * self.reference_entries[element.symbol].normalized_n_conc
             for element in self.entry.composition.elements
         )
@@ -1056,6 +1061,9 @@ class PourbaixDiagram(MSONable):
             # Note that we get reduced compositions for solids and non-reduced
             # compositions for ions because ions aren't normalized due to
             # their charge state.
+            # Sort entries by name
+            entry_list = sorted(entry_list, key=lambda x: x.name)
+
             entry_comps = [entry.composition for entry in entry_list]
             rxn = Reaction(entry_comps + dummy_oh, [prod_comp])
             react_coeffs = [-coeff for coeff in rxn.coeffs[: len(entry_list)]]
@@ -1095,6 +1103,9 @@ class PourbaixDiagram(MSONable):
             The list of boundary points are the sides of the N-1
             dim polytope bounding the allowable ph-V range of each entry.
         """
+        # Sort entries by name
+        pourbaix_entries = sorted(pourbaix_entries, key=lambda x: x.name)
+
         if limits is None:
             limits = [[-2, 16], [-4, 4]]
 
@@ -1225,7 +1236,7 @@ class PourbaixDiagram(MSONable):
                         -PREFAC * ref_pbx_entry.n_conc,
                         0,
                         -(
-                            ref_pbx_entry.energy_without_conc_term - 1e-3  # can't go thicker than this
+                            ref_pbx_entry.energy_without_conc_term - 1e-4  # can't go thicker than this
                         ),  # add a small offset to avoid numerical issues
                     ]
                 )
@@ -1512,6 +1523,11 @@ class SurfacePourbaixDiagram(MSONable):
                 # self.ref_pbx.stable_3D_entries, self.ref_pbx.stable_3D_vertices = self.ref_pbx.get_3D_pourbaix_domains(
                 #     self.ref_pbx.all_entries
                 # )
+            # Sort the bulk Pourbaix entries first
+            self.ref_pbx.stable_3D_vertices = dict(
+                sorted(self.ref_pbx.stable_3D_vertices.items(), key=lambda x: x[0].name)
+            )
+
             # Remove any excluded bulk entries
             if excluded_bulk_entries is not None:
                 for entry in excluded_bulk_entries:
@@ -1539,6 +1555,9 @@ class SurfacePourbaixDiagram(MSONable):
 
         # Create regular Pourbaix diagram in pH-V space
         else:
+            # Sort the bulk Pourbaix entries first
+            self.ref_pbx.stable_vertices = dict(sorted(self.ref_pbx.stable_vertices.items(), key=lambda x: x[0].name))
+
         # Step 1: create SurfacePourbaixEntry's for each region
         self.ind_surface_pbx_entries = self.construct_surf_pbx_entries()
 
@@ -1841,7 +1860,7 @@ class SurfacePourbaixDiagram(MSONable):
         #     _points, _v, w = simple_pca(vertices, k=3)
         #     normal_vec = w[:, 2]  # get the normal vector of the projected (2D) plane
         #     point_on_plane = np.mean(vertices, axis=0)
-        #     breakpoint()
+
         #     dx = interior_point[:2] - point_on_plane[:2]
 
         #     # Project the interior point onto the plane
@@ -2070,10 +2089,16 @@ class SurfacePourbaixDiagram(MSONable):
             overlapping_indices = np.where(
                 np.isclose(sorted_points[:, None, :], overlapping_points[None, :, :], atol=1e-3).all(-1).any(-1)
             )[0]
-
+            if process_3D and len(sorted_points) < 4:
+                # Can't do convex hull with less than 4 points
+                hull_idx = np.arange(len(sorted_points)).tolist()
+                print("Less than 4 points, using all points, indices: ", hull_idx)
+            else:
             hull = ConvexHull(sorted_points)  # convex hull to remove interior points
+                hull_idx = hull.vertices.tolist()
+
             # Combine the convex hull vertices with the overlapping points
-            combined_idx = np.unique(sorted(overlapping_indices.tolist() + hull.vertices.tolist()))
+            combined_idx = np.unique(sorted(overlapping_indices.tolist() + hull_idx))
             # Rearrange the indices again for plotting
             merged_pbx_stable_sorted_vertices[entry] = self._sort_pourbaix_domain_vertices(sorted_points[combined_idx])
 
