@@ -103,8 +103,12 @@ class ChemicalPotentialDiagram(MSONable):
             renormalized_entries = []
             for entry in entries:
                 comp_dict = entry.composition.as_dict()
-                renormalization_energy = sum(comp_dict[el] * _el_refs[Element(el)].energy_per_atom for el in comp_dict)
-                renormalized_entries.append(_renormalize_entry(entry, renormalization_energy / sum(comp_dict.values())))
+                renormalization_energy = sum(
+                    comp_dict[el] * _el_refs[Element(el)].energy_per_atom for el in comp_dict
+                )
+                renormalized_entries.append(
+                    _renormalize_entry(entry, renormalization_energy / sum(comp_dict.values()))
+                )
 
             entries = renormalized_entries
 
@@ -120,7 +124,9 @@ class ChemicalPotentialDiagram(MSONable):
         self._hyperplanes, self._hyperplane_entries = self._get_hyperplanes_and_entries()
 
         if self.dim < 2:
-            raise ValueError("ChemicalPotentialDiagram currently requires phase diagrams with 2 or more elements!")
+            raise ValueError(
+                "ChemicalPotentialDiagram currently requires phase diagrams with 2 or more elements!"
+            )
 
         if len(self.el_refs) != self.dim:
             missing = set(self.elements) - set(self.el_refs)
@@ -178,7 +184,9 @@ class ChemicalPotentialDiagram(MSONable):
                 elems = elems[:3]  # default to first three elements
 
         if len(elems) == 2 and self.dim == 2:
-            fig = self._get_2d_plot(elements=elems, label_stable=label_stable, element_padding=element_padding)
+            fig = self._get_2d_plot(
+                elements=elems, label_stable=label_stable, element_padding=element_padding
+            )
         elif len(elems) == 2 and self.dim > 2:
             entries = [e for e in self.entries if set(e.elements).issubset(elems)]
             cpd = ChemicalPotentialDiagram(
@@ -241,7 +249,8 @@ class ChemicalPotentialDiagram(MSONable):
         """
         data = np.array(
             [
-                [entry.composition.get_atomic_fraction(el) for el in self.elements] + [entry.energy_per_atom]
+                [entry.composition.get_atomic_fraction(el) for el in self.elements]
+                + [entry.energy_per_atom]
                 for entry in self._min_entries
             ]
         )
@@ -258,7 +267,9 @@ class ChemicalPotentialDiagram(MSONable):
 
         return hyperplanes, hyperplane_entries
 
-    def _get_2d_plot(self, elements: list[Element], label_stable: bool | None, element_padding: float | None) -> Figure:
+    def _get_2d_plot(
+        self, elements: list[Element], label_stable: bool | None, element_padding: float | None
+    ) -> Figure:
         """Get a Plotly figure for a 2-dimensional chemical potential diagram."""
         domains = self.domains.copy()
         elem_indices = [self.elements.index(e) for e in elements]
@@ -267,7 +278,9 @@ class ChemicalPotentialDiagram(MSONable):
         draw_domains = {}
 
         if element_padding is not None and element_padding > 0:
-            new_lims = self._get_new_limits_from_padding(domains, elem_indices, element_padding, self.default_min_limit)
+            new_lims = self._get_new_limits_from_padding(
+                domains, elem_indices, element_padding, self.default_min_limit
+            )
         else:
             new_lims = []
 
@@ -327,7 +340,9 @@ class ChemicalPotentialDiagram(MSONable):
         annotations = []
 
         if element_padding and element_padding > 0:
-            new_lims = self._get_new_limits_from_padding(domains, elem_indices, element_padding, self.default_min_limit)
+            new_lims = self._get_new_limits_from_padding(
+                domains, elem_indices, element_padding, self.default_min_limit
+            )
         else:
             new_lims = []
 
@@ -434,7 +449,9 @@ class ChemicalPotentialDiagram(MSONable):
         ]
 
     @staticmethod
-    def _get_3d_domain_lines(domains: dict[str, list[Simplex] | None], linewidth: float = 4.5) -> list[Scatter3d]:
+    def _get_3d_domain_lines(
+        domains: dict[str, list[Simplex] | None], linewidth: float = 4.5, dash: str = "solid"
+    ) -> list[Scatter3d]:
         """Get a list of Scatter3d objects tracing the domain lines on a
         3-dimensional chemical potential diagram.
         """
@@ -452,7 +469,7 @@ class ChemicalPotentialDiagram(MSONable):
                 y=y,
                 z=z,
                 mode="lines",
-                line={"color": "black", "width": linewidth},
+                line={"color": "black", "width": linewidth, "dash": dash},
                 showlegend=False,
             )
         ]
@@ -496,7 +513,13 @@ class ChemicalPotentialDiagram(MSONable):
                 z=points_3d[:, 2],
                 alphahull=0,
                 showlegend=True,
-                lighting={"fresnel": 1.0},
+                lighting={
+                    "ambient": 1.0,  # Maximize ambient light (uniform lighting)
+                    "diffuse": 0.0,  # Remove diffuse reflection
+                    "specular": 0.0,  # Disable specular highlights
+                    "roughness": 1.0,  # Smooth surface appearance
+                    "fresnel": 0.0,  # Remove Fresnel effect
+                },
                 color=formula_colors[idx],
                 name=f"{formula} (mesh)",
                 opacity=opacity,
@@ -557,7 +580,9 @@ class ChemicalPotentialDiagram(MSONable):
         return min_entries, el_refs
 
     @staticmethod
-    def _get_annotation(ann_loc: np.ndarray, formula: str, fontsize: int = 12) -> dict[str, str | float]:
+    def _get_annotation(
+        ann_loc: np.ndarray, formula: str, fontsize: int = 12
+    ) -> dict[str, str | float]:
         """Get a Plotly annotation dict given a formula and location."""
         formula = htmlify(formula)
         annotation = plotly_layouts["default_annotation_layout"].copy()
@@ -634,7 +659,9 @@ class ChemicalPotentialDiagram(MSONable):
         return "-".join(sorted(e.symbol for e in self.elements))
 
     def __repr__(self):
-        return f"ChemicalPotentialDiagram for {self.chemical_system} with {len(self.entries)} entries"
+        return (
+            f"ChemicalPotentialDiagram for {self.chemical_system} with {len(self.entries)} entries"
+        )
 
 
 def simple_pca(data: np.ndarray, k: int = 2) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
@@ -656,7 +683,6 @@ def simple_pca(data: np.ndarray, k: int = 2) -> tuple[np.ndarray, np.ndarray, np
     v = v[idx]
     w = w[:, idx]
     scores = data.dot(w[:, :k])
-
     return scores, v[:k], w[:, :k]
 
 
