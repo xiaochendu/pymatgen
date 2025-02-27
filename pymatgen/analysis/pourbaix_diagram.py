@@ -1911,19 +1911,7 @@ class SurfacePourbaixDiagram(MSONable):
         lower_bound_ineq = [0, 0, 0, -1, 2 * g_max]
         border_hyperplanes = np.vstack([border_ineqs, [lower_bound_ineq]])
         interior_point = np.array([*np.mean(vertices, axis=0).tolist(), g_max])
-        # NOTE: not needed anymore, but keeping the code here for reference
-        # # For the at equilibrium case, we can project the interior_point onto the equilibrium plane
-        # # To do this, we need to find the normal vector of the plane and the point on the plane
-        # if at_equilibrium:
-        #     # Find equation of the plane in 3D space to express lg(conc) as a function of pH and V
-        #     _points, _v, w = simple_pca(vertices, k=3)
-        #     normal_vec = w[:, 2]  # get the normal vector of the projected (2D) plane
-        #     point_on_plane = np.mean(vertices, axis=0)
 
-        #     dx = interior_point[:2] - point_on_plane[:2]
-
-        #     # Project the interior point onto the plane
-        #     interior_point[:2] = point_on_plane[:2] + np.dot(dx, normal_vec[:2]) * normal_vec[:2]
         return border_hyperplanes, interior_point
 
     # Both 2D and 3D surface Pourbaix diagram case
