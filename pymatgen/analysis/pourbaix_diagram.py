@@ -549,6 +549,8 @@ class SurfacePourbaixEntry(PourbaixEntry):
             dct["entry_type"] = "Solid"
         dct["entry"] = self.entry.as_dict()
         dct["reference_entries"] = {k: v.as_dict() for k, v in self.reference_entries.items()}
+        dct["clean_entry"] = self.clean_entry.as_dict() if self.clean_entry else None
+        dct["clean_entry_factor"] = self.clean_entry_factor
         dct["concentration"] = self.concentration
         dct["entry_id"] = self.entry_id
         return dct
@@ -565,9 +567,20 @@ class SurfacePourbaixEntry(PourbaixEntry):
         reference_entries = {
             k: MontyDecoder().process_decoded(v) for k, v in dct["reference_entries"].items()
         }
+        clean_entry = (
+            ComputedStructureEntry.from_dict(dct["clean_entry"]) if dct["clean_entry"] else None
+        )
+        clean_entry_factor = dct["clean_entry_factor"]
         entry_id = dct["entry_id"]
         concentration = dct["concentration"]
-        return cls(surface_entry, reference_entries, entry_id, concentration)
+        return cls(
+            surface_entry,
+            reference_entries,
+            clean_entry=clean_entry,
+            clean_entry_factor=clean_entry_factor,
+            entry_id=entry_id,
+            concentration=concentration,
+        )
 
     @property
     def get_unit_primitive_area(self):
@@ -1858,7 +1871,7 @@ class SurfacePourbaixDiagram(MSONable):
         )
         hyperplanes[:, -2] = 1
 
-        #     # TODO: Write test cases here
+        # TODO: Write test cases here
         return hyperplanes
 
     # 2D surface Pourbaix diagram case
@@ -2217,7 +2230,9 @@ class SurfacePourbaixDiagram(MSONable):
             "@module": type(self).__module__,
             "@class": type(self).__name__,
             "surface_entries": [entry.as_dict() for entry in self.surface_entries],
+            "reference_surface_entry": self.reference_surface_entry.as_dict(),
             "reference_pourbaix_diagram": self.ref_pbx.as_dict(),
+            "reference_surface_entry_factor": self.reference_surface_entry_factor,
             "reference_elements": self.ref_elems,
         }
 
@@ -2232,7 +2247,9 @@ class SurfacePourbaixDiagram(MSONable):
         """
         return cls(
             MontyDecoder().process_decoded(dct["surface_entries"]),
+            MontyDecoder().process_decoded(dct["reference_surface_entry"]),
             MontyDecoder().process_decoded(dct["reference_pourbaix_diagram"]),
+            reference_surface_entry_factor=dct["reference_surface_entry_factor"],
             reference_elements=dct["reference_elements"],
         )
 

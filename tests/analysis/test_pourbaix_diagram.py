@@ -20,9 +20,10 @@ from pymatgen.analysis.pourbaix_diagram import (
     SurfacePourbaixDiagram,
     SurfacePourbaixEntry,
 )
+from pymatgen.core import Structure
 from pymatgen.core.composition import Composition
 from pymatgen.core.ion import Ion
-from pymatgen.entries.computed_entries import ComputedEntry
+from pymatgen.entries.computed_entries import ComputedEntry, ComputedStructureEntry
 from pymatgen.util.testing import TEST_FILES_DIR, PymatgenTest
 
 np.set_printoptions(precision=5, suppress=True)
@@ -154,18 +155,24 @@ class TestOxygenPourbaixEntry(PymatgenTest):
         # when considering the energies in the context of reduction 1/2 O2 or O -> H2O - 2H+ - 2e-
         # the energy at conditions is Gibbs free energy of the reduction (forward) reaction
         # by looking at the Pourbaix diagram for water, these energies should make sense
-        assert self.pbx_entry.energy_at_conditions(0, 0) == approx(-9.8332), "Wrong energy at pH = 0 and V = 0!"
-        assert self.pbx_entry.energy_at_conditions(14, 0.401) == approx(
-            -0.005999, abs=1e-3
-        ), "Wrong energy at pH = 14 and V = 0.401!"
-        assert self.pbx_entry.energy_at_conditions(10, 0) == approx(-5.1052), "Wrong energy at pH = 10 and V = 0!"
+        assert self.pbx_entry.energy_at_conditions(0, 0) == approx(-9.8332), (
+            "Wrong energy at pH = 0 and V = 0!"
+        )
+        assert self.pbx_entry.energy_at_conditions(14, 0.401) == approx(-0.005999, abs=1e-3), (
+            "Wrong energy at pH = 14 and V = 0.401!"
+        )
+        assert self.pbx_entry.energy_at_conditions(10, 0) == approx(-5.1052), (
+            "Wrong energy at pH = 10 and V = 0!"
+        )
         assert self.pbx_entry.energy_at_conditions(np.array([1, 2, 3]), 0) == approx(
             [-9.36, -8.888, -8.415], abs=1e-3
         ), "Wrong energy at pH = [1, 2, 3] and V = 0!"
         assert self.pbx_entry.energy_at_conditions(10, np.array([1, 2, 3])) == approx(
             [2.895, 10.895, 18.895], abs=1e-3
         ), "Wrong energy at pH = 10 and V = [1, 2, 3]!"
-        assert self.pbx_entry.energy_at_conditions(np.array([1, 2, 3]), np.array([1, 2, 3])) == approx(
+        assert self.pbx_entry.energy_at_conditions(
+            np.array([1, 2, 3]), np.array([1, 2, 3])
+        ) == approx(
             [-1.36, 7.112, 15.585],
             abs=1e-3,
         ), "Wrong energy at pH = [1, 2, 3] and V = [1, 2, 3]!"
@@ -212,10 +219,12 @@ class TestHydrogenPourbaixEntry(PymatgenTest):
         # when considering the energies in the context of oxidation (backward) 1/2 H2 or H -> H+ + e-
         # the energy at conditions is the negative of the Gibbs free energy of the reduction (forward) reaction
         # by looking at the Pourbaix diagram for water, these energies should make sense
-        assert self.pbx_entry.energy_at_conditions(0, 0) == approx(0.0), "Wrong energy at pH = 0 and V = 0!"
-        assert self.pbx_entry.energy_at_conditions(14, -0.829) == approx(
-            0.00159, abs=1e-3
-        ), "Wrong energy at pH = 14 and V = -0.829!"
+        assert self.pbx_entry.energy_at_conditions(0, 0) == approx(0.0), (
+            "Wrong energy at pH = 0 and V = 0!"
+        )
+        assert self.pbx_entry.energy_at_conditions(14, -0.829) == approx(0.00159, abs=1e-3), (
+            "Wrong energy at pH = 14 and V = -0.829!"
+        )
         assert self.pbx_entry.energy_at_conditions(np.array([1, 2, 3]), 0) == approx(
             [-0.0591, -0.1182, -0.1773],
             abs=1e-3,
@@ -227,7 +236,9 @@ class TestHydrogenPourbaixEntry(PymatgenTest):
         assert self.pbx_entry.energy_at_conditions(10, np.array([1, 2, 3])) == approx(
             [-1.591, -2.591, -3.591], abs=1e-3
         ), "Wrong energy at pH = 10 and V = [1, 2, 3]!"
-        assert self.pbx_entry.energy_at_conditions(np.array([1, 2, 3]), np.array([1, 2, 3])) == approx(
+        assert self.pbx_entry.energy_at_conditions(
+            np.array([1, 2, 3]), np.array([1, 2, 3])
+        ) == approx(
             [-1.0591, -2.1182, -3.1773],
             abs=1e-3,
         ), "Wrong energy at pH = [1, 2, 3] and V = [1, 2, 3]!"
@@ -235,24 +246,37 @@ class TestHydrogenPourbaixEntry(PymatgenTest):
 
 class TestSurfacePourbaixEntry(PymatgenTest):
     def setUp(self):
-        self.entry = ComputedEntry("Sr16 Ir16 O48", -133.3124)  # formation energy
+        self.test_data = loadfn(f"{TEST_DIR}/pourbaix_test_data.json")
+        # Import cif and create structure
+        self.structure = Structure.from_file(f"{TEST_DIR}/SrIrO3_001_2x2x4.cif")
+        self.entry = ComputedStructureEntry(self.structure, -133.3124)  # formation energy
         self.reference_entries = {
             "O": OxygenPourbaixEntry(ComputedEntry("H8O4", -9.8332)),
             "Sr": PourbaixEntry(
-                IonEntry.from_dict({"ion": {"Sr": 1.0, "charge": 2.0}, "energy": -5.798066, "name": "Sr[+2]"})
+                IonEntry.from_dict(
+                    {"ion": {"Sr": 1.0, "charge": 2.0}, "energy": -5.798066, "name": "Sr[+2]"}
+                )
             ),
             "Ir": PourbaixEntry(ComputedEntry("Ir2 O4", -6.2984)),
         }
-        self.pbx_entry = SurfacePourbaixEntry(self.entry, self.reference_entries)
+        self.pbx_entry = SurfacePourbaixEntry(
+            self.entry, self.reference_entries, clean_entry=self.entry, clean_entry_factor=1.0
+        )
 
     def test_pourbaix_entry(self):
         assert self.pbx_entry.entry.energy == approx(-133.3124), "Wrong Energy!"
         assert self.pbx_entry.entry.name == "SrIrO3", "Wrong Entry!"
-        assert self.pbx_entry.reference_entries["O"].entry.energy == approx(-9.8332), "Wrong Energy!"
+        assert self.pbx_entry.reference_entries["O"].entry.energy == approx(-9.8332), (
+            "Wrong Energy!"
+        )
         assert self.pbx_entry.reference_entries["O"].entry.name == "H2O", "Wrong Entry!"
-        assert self.pbx_entry.reference_entries["Sr"].entry.energy == approx(-5.798066), "Wrong Energy!"
+        assert self.pbx_entry.reference_entries["Sr"].entry.energy == approx(-5.798066), (
+            "Wrong Energy!"
+        )
         assert self.pbx_entry.reference_entries["Sr"].entry.name == "Sr[+2]", "Wrong Entry!"
-        assert self.pbx_entry.reference_entries["Ir"].entry.energy == approx(-6.2984), "Wrong Energy!"
+        assert self.pbx_entry.reference_entries["Ir"].entry.energy == approx(-6.2984), (
+            "Wrong Energy!"
+        )
         assert self.pbx_entry.reference_entries["Ir"].entry.name == "IrO2", "Wrong Entry!"
 
     def test_calc_coeff_terms(self):
@@ -261,17 +285,21 @@ class TestSurfacePourbaixEntry(PymatgenTest):
         assert self.pbx_entry.nH2O == -32.0, "Wrong nH2O!"
         assert self.pbx_entry.energy == approx(54.85056, rel=1e-3), "Wrong Energy!"
 
-        # normalized values
-        assert self.pbx_entry.normalized_npH == -1.0, "Wrong normalized npH!"
+        # Normalized values bsaed on clean entry
+        assert self.pbx_entry.normalized_npH == -32.0, "Wrong normalized npH!"
         assert self.pbx_entry.normalized_nPhi == 0.0, "Wrong normalized nPhi!"
-        assert self.pbx_entry.normalized_nH2O == -1.0, "Wrong normalized nH2O!"
-        assert self.pbx_entry.normalized_energy == approx(1.71408, rel=1e-3), "Wrong normalized Energy!"
+        assert self.pbx_entry.normalized_nH2O == -32.0, "Wrong normalized nH2O!"
+        assert self.pbx_entry.normalized_energy == approx(54.85056, rel=1e-3), (
+            "Wrong normalized Energy!"
+        )
 
     def test_as_from_dict(self):
         dct = self.pbx_entry.as_dict()
         loaded_entry = self.pbx_entry.from_dict(dct)
         assert loaded_entry.name == self.pbx_entry.name, "Wrong Entry!"
-        assert loaded_entry.energy == self.pbx_entry.energy, "as_dict and from_dict energies unequal"
+        assert loaded_entry.energy == self.pbx_entry.energy, (
+            "as_dict and from_dict energies unequal"
+        )
         assert set(loaded_entry.reference_entries.keys()) == set(self.reference_entries.keys())
 
         # Ensure reference entries are loaded correctly
@@ -282,7 +310,8 @@ class TestSurfacePourbaixEntry(PymatgenTest):
                 self.reference_entries[key].entry.energy
             ), f"Wrong Energy for {key}!"
             assert (
-                loaded_entry.reference_entries[key].entry.name == self.reference_entries[key].entry.name
+                loaded_entry.reference_entries[key].entry.name
+                == self.reference_entries[key].entry.name
             ), f"Wrong Entry for {key}!"
 
         # Ensure computed entry data persists
@@ -294,16 +323,18 @@ class TestSurfacePourbaixEntry(PymatgenTest):
         assert reloaded.entry.data is not None
 
     def test_energy_functions(self):
-        assert self.pbx_entry.energy_at_conditions(10, 0) == approx(
-            35.93856, rel=1e-3
-        ), "Wrong energy at pH = 10 and V = 0!"
+        assert self.pbx_entry.energy_at_conditions(10, 0) == approx(35.93856, rel=1e-3), (
+            "Wrong energy at pH = 10 and V = 0!"
+        )
         assert self.pbx_entry.energy_at_conditions(np.array([1, 2, 3]), 0) == approx(
             [52.959, 51.068, 49.177], abs=1e-3
         ), "Wrong energy at pH = [1, 2, 3] and V = 0!"
         assert self.pbx_entry.energy_at_conditions(10, np.array([1, 2, 3])) == approx(
             [35.939, 35.939, 35.939], abs=1e-3
         ), "Wrong energy at pH = 10 and V = [1, 2, 3]!"
-        assert self.pbx_entry.energy_at_conditions(np.array([1, 2, 3]), np.array([1, 2, 3])) == approx(
+        assert self.pbx_entry.energy_at_conditions(
+            np.array([1, 2, 3]), np.array([1, 2, 3])
+        ) == approx(
             [52.959, 51.068, 49.177],
             abs=1e-3,
         ), "Wrong energy at pH = [1, 2, 3] and V = [1, 2, 3]!"
@@ -326,16 +357,17 @@ class TestPourbaixDiagram(TestCase):
         }, "List of stable entries does not match"
 
         assert {entry.name for entry in self.pbx_no_filter.stable_entries} == {
-            "ZnO(s)",
             "Zn[2+]",
             "ZnHO2[-]",
             "ZnO2[2-]",
             "Zn(s)",
             "ZnO2(s)",
-            "ZnH(s)",
+            "ZnO(s)",
         }, "List of stable entries for unfiltered pbx does not match"
 
-        pbx_low_conc = PourbaixDiagram(self.test_data["Zn"], conc_dict={"Zn": 1e-8}, filter_solids=True)
+        pbx_low_conc = PourbaixDiagram(
+            self.test_data["Zn"], conc_dict={"Zn": 1e-8}, filter_solids=True
+        )
         assert {entry.name for entry in pbx_low_conc.stable_entries} == {
             "Zn(HO)2(aq)",
             "Zn[2+]",
@@ -394,8 +426,12 @@ class TestPourbaixDiagram(TestCase):
             PourbaixEntry(ComputedEntry("VFe2Si", -1.8542253150000008), entry_id="mp-4595"),
             PourbaixEntry(ComputedEntry("Fe", 0), entry_id="mp-13"),
             PourbaixEntry(ComputedEntry("V2Ir2", -2.141851640000006), entry_id="mp-569250"),
-            PourbaixEntry(IonEntry(Ion.from_formula("Fe[2+]"), -0.7683100214319288), entry_id="ion-0"),
-            PourbaixEntry(IonEntry(Ion.from_formula("Li[1+]"), -3.0697590542787156), entry_id="ion-12"),
+            PourbaixEntry(
+                IonEntry(Ion.from_formula("Fe[2+]"), -0.7683100214319288), entry_id="ion-0"
+            ),
+            PourbaixEntry(
+                IonEntry(Ion.from_formula("Li[1+]"), -3.0697590542787156), entry_id="ion-12"
+            ),
         ]
         comp_dict = Composition({"Fe": 1, "Ir": 1, "Li": 2, "Si": 1, "V": 2}).fractional_composition
 
@@ -409,9 +445,9 @@ class TestPourbaixDiagram(TestCase):
     def test_get_decomposition(self):
         # Test a stable entry to ensure that it's zero in the stable region
         entry = self.test_data["Zn"][12]  # Should correspond to mp-2133
-        assert self.pbx.get_decomposition_energy(entry, 10, 1) == approx(
-            0.0, 5
-        ), "Decomposition energy of ZnO is not 0."
+        assert self.pbx.get_decomposition_energy(entry, 10, 1) == approx(0.0, 5), (
+            "Decomposition energy of ZnO is not 0."
+        )
 
         # Test an unstable entry to ensure that it's never zero
         entry = self.test_data["Zn"][11]
@@ -440,7 +476,9 @@ class TestPourbaixDiagram(TestCase):
             filter_solids=True,
             comp_dict={"Na": 1, "Sn": 12, "C": 24},
         )
-        assert pbx.get_decomposition_energy(custom_ion_entry, 5, 2) == approx(2.1209002582, abs=1e-1)
+        assert pbx.get_decomposition_energy(custom_ion_entry, 5, 2) == approx(
+            2.1209002582, abs=1e-1
+        )
 
     def test_get_stable_entry(self):
         entry = self.pbx.get_stable_entry(0, 0)
@@ -480,13 +518,12 @@ class TestPourbaixDiagram(TestCase):
         dct = self.pbx_no_filter.as_dict()
         new = PourbaixDiagram.from_dict(dct)
         assert {entry.name for entry in new.stable_entries} == {
-            "ZnO(s)",
             "Zn[2+]",
             "ZnHO2[-]",
             "ZnO2[2-]",
             "Zn(s)",
             "ZnO2(s)",
-            "ZnH(s)",
+            "ZnO(s)",
         }, "List of stable entries for unfiltered pbx does not match"
 
         pd_binary = PourbaixDiagram(
@@ -502,6 +539,8 @@ class TestPourbaixDiagram(TestCase):
 class TestSurfacePourbaixDiagram(TestCase):
     @classmethod
     def setUpClass(cls):
+        cls.ref_structure = Structure.from_file(f"{TEST_DIR}/SrIrO3_001_2x2x4.cif")
+        cls.ref_entry = ComputedStructureEntry(cls.ref_structure, -133.3124)  # formation energy
         cls.test_data = loadfn(f"{TEST_DIR}/surface_pourbaix_test_data.json")
         cls.pbx = cls.test_data["reference_pourbaix_diagram"]
         pH_limits = [0, 4]
@@ -509,10 +548,18 @@ class TestSurfacePourbaixDiagram(TestCase):
         cls.pbx.stable_entries, cls.pbx.stable_vertices = cls.pbx.get_pourbaix_domains(
             cls.pbx.all_entries, [pH_limits, phi_limits]
         )
-
-        cls.surf_pbx = SurfacePourbaixDiagram(cls.test_data["surface_entries"], cls.pbx)
+        cls.surf_pbx = SurfacePourbaixDiagram(
+            cls.test_data["surface_entries"],
+            cls.ref_entry,
+            cls.pbx,
+            reference_surface_entry_factor=1.0,
+        )
         cls.surf_pbx_wo_elems = SurfacePourbaixDiagram(
-            cls.test_data["surface_entries"], cls.pbx, reference_elements=("O", "Ir", "Sr")
+            cls.test_data["surface_entries"],
+            cls.ref_entry,
+            cls.pbx,
+            reference_surface_entry_factor=1.0,
+            reference_elements=("O", "Ir", "Sr"),
         )
 
     @staticmethod
@@ -521,10 +568,12 @@ class TestSurfacePourbaixDiagram(TestCase):
 
     def test_ref_elems(self):
         # make sure it works for both specified and unspecified reference elements
-        assert set(self.surf_pbx_wo_elems.ref_elems) == set(
-            ["O", "Ir", "Sr"]
-        ), "Reference elements not inferred correctly"
-        assert set(self.surf_pbx.ref_elems) == set(["O", "Ir", "Sr"]), "Reference elements not explicitly set correctly"
+        assert set(self.surf_pbx_wo_elems.ref_elems) == set(["O", "Ir", "Sr"]), (
+            "Reference elements not inferred correctly"
+        )
+        assert set(self.surf_pbx.ref_elems) == set(["O", "Ir", "Sr"]), (
+            "Reference elements not explicitly set correctly"
+        )
 
     # TODO: make the tests more rigorous
     def test_ind_surface_pbx_entries(self):
@@ -536,14 +585,21 @@ class TestSurfacePourbaixDiagram(TestCase):
             assert len(surface_entries) == 3, "Incorrect number of surface entries"
 
             for entry in surface_entries:
-                assert isinstance(entry, SurfacePourbaixEntry), "Entry is not a SurfacePourbaixEntry"
+                assert isinstance(entry, SurfacePourbaixEntry), (
+                    "Entry is not a SurfacePourbaixEntry"
+                )
                 assert isinstance(entry.entry, ComputedEntry), "Entry is not a ComputedEntry"
-                assert isinstance(entry.reference_entries, dict), "Reference entries are not a dictionary"
+                assert isinstance(entry.reference_entries, dict), (
+                    "Reference entries are not a dictionary"
+                )
                 assert all(
-                    isinstance(ref_entry, PourbaixEntry) for ref_entry in entry.reference_entries.values()
+                    isinstance(ref_entry, PourbaixEntry)
+                    for ref_entry in entry.reference_entries.values()
                 ), "Reference entries are not PourbaixEntries"
                 assert len(entry.reference_entries) == 3, "Incorrect number of reference entries"
-                assert set(entry.reference_entries.keys()) == set(["O", "Ir", "Sr"]), "Incorrect reference elements"
+                assert set(entry.reference_entries.keys()) == set(["O", "Ir", "Sr"]), (
+                    "Incorrect reference elements"
+                )
 
                 if set(TestSurfacePourbaixDiagram.domain_formulae(domain)) == set(["Sr1", "Ir1"]):
                     # Test SurfacePourbaixEntries are correct
@@ -589,7 +645,9 @@ class TestSurfacePourbaixDiagram(TestCase):
 
         for domain, hyperplane_info in self.surf_pbx.ind_hyperplanes.items():
             assert isinstance(domain, MultiEntry), "Domain is not a Pourbaix MultiEntry"
-            assert hyperplane_info["hyperplanes"].shape == (8, 4), "Incorrect dimensions of hyperplanes"
+            assert hyperplane_info["hyperplanes"].shape == (8, 4), (
+                "Incorrect dimensions of hyperplanes"
+            )
             if set(TestSurfacePourbaixDiagram.domain_formulae(domain)) == set(["Sr1", "Ir1"]):
                 # check each row is in the list, not necessarily in order
                 for hyperplane in hyperplane_info["hyperplanes"]:
@@ -606,9 +664,8 @@ class TestSurfacePourbaixDiagram(TestCase):
                             [0.0, 0.0, -1.0, -268.20246],
                         ]
                     ), "Incorrect hyperplane"
-
                 assert hyperplane_info["interior_point"] == approx(
-                    [2.0, 0.22092, -134.10123], rel=1e-2
+                    [2.0, 0.16182, -134.52836], rel=1e-2
                 ), "Incorrect interior point"
             else:
                 # check each row is in the list, not necessarily in order
@@ -626,9 +683,8 @@ class TestSurfacePourbaixDiagram(TestCase):
                             [0.0, 0.0, -1.0, -124.83072],
                         ]
                     ), "Incorrect hyperplane"
-
                 assert hyperplane_info["interior_point"] == approx(
-                    [2.0, 0.60272, -62.41536], rel=1e-2
+                    [2.0, 0.66182, -62.41536], rel=1e-2
                 ), "Incorrect interior point"
 
     def test_ind_stable_domain_vertices(self):
@@ -641,12 +697,18 @@ class TestSurfacePourbaixDiagram(TestCase):
             if set(TestSurfacePourbaixDiagram.domain_formulae(domain)) == set(["Sr1", "Ir1"]):
                 for vertices in stable_domains.values():
                     assert np.allclose(
-                        vertices, [[0.0, 0.44185], [4.0, 0.20545], [4.0, -0.0], [-0.0, 0.0]], rtol=1e-3, atol=1e-3
+                        vertices,
+                        [[0.0, 0.0], [4.0, 0.0], [4.0, 0.20545], [0.0, 0.44185]],
+                        rtol=1e-3,
+                        atol=1e-3,
                     )
             else:
                 for vertices in stable_domains.values():
                     assert np.allclose(
-                        vertices, [[4.0, 0.20545], [-0.0, 0.44185], [-0.0, 1.0], [4.0, 1.0]], rtol=1e-3, atol=1e-3
+                        vertices,
+                        [[0.0, 0.44185], [4.0, 0.20545], [4.0, 1.0], [0.0, 1.0]],
+                        rtol=1e-3,
+                        atol=1e-3,
                     )
 
     def test_final_stable_domain_vertices(self):
@@ -668,11 +730,37 @@ class TestSurfacePourbaixDiagram(TestCase):
                     ]
                 ), "Incorrect vertex"
 
+    def test_serialization(self):
+        dct = self.surf_pbx.as_dict()
+        new = SurfacePourbaixDiagram.from_dict(dct)
+        # Test that the surface pourbaix entries are correctly initialized
+        for domain, surface_entries in new.ind_surface_pbx_entries.items():
+            assert isinstance(domain, MultiEntry), "Domain is not a Pourbaix MultiEntry"
+            assert len(surface_entries) == 3, "Incorrect number of surface entries"
+
+            for entry in surface_entries:
+                assert isinstance(entry, SurfacePourbaixEntry), (
+                    "Entry is not a SurfacePourbaixEntry"
+                )
+                assert isinstance(entry.entry, ComputedEntry), "Entry is not a ComputedEntry"
+                assert isinstance(entry.reference_entries, dict), (
+                    "Reference entries are not a dictionary"
+                )
+                assert all(
+                    isinstance(ref_entry, PourbaixEntry)
+                    for ref_entry in entry.reference_entries.values()
+                ), "Reference entries are not PourbaixEntries"
+                assert len(entry.reference_entries) == 3, "Incorrect number of reference entries"
+                assert set(entry.reference_entries.keys()) == set(["O", "Ir", "Sr"]), (
+                    "Incorrect reference elements"
+                )
+
 
 class TestPourbaixPlotter(TestCase):
     def setUp(self):
         self.test_data = loadfn(f"{TEST_DIR}/pourbaix_test_data.json")
         self.pd = PourbaixDiagram(self.test_data["Zn"])
+        self.pbx = PourbaixDiagram(self.test_data["Zn"], filter_solids=False)
         self.plotter = PourbaixPlotter(self.pd)
 
     def test_plot_pourbaix(self):
