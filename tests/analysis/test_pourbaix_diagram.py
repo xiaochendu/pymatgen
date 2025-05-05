@@ -535,6 +535,19 @@ class TestPourbaixDiagram(TestCase):
         new_binary = PourbaixDiagram.from_dict(pd_binary.as_dict())
         assert len(pd_binary.stable_entries) == len(new_binary.stable_entries)
 
+    def test_3D_pourbaix_domains(self):
+        pH_limits = (-2, 16)
+        phi_limits = (-2, 2)
+        lg_conc_limits = (-12, -2)
+        # Test that the Pourbaix diagram can be generated in 3D
+        self.pbx._stable_3D_domains, self.pbx._stable_3D_domain_vertices = (
+            self.pbx.get_3D_pourbaix_domains(
+                self.pbx._processed_entries,
+                limits=[pH_limits, phi_limits, lg_conc_limits],
+            )
+        )
+        # TODO: test equilibrium 3D domains
+
 
 class TestSurfacePourbaixDiagram(TestCase):
     @classmethod
@@ -756,11 +769,215 @@ class TestSurfacePourbaixDiagram(TestCase):
                 )
 
 
+class Test3DSurfacePourbaixDiagram(TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.test_data = loadfn(f"{TEST_DIR}/surface_3d_pourbaix_test_data.json")
+        cls.surf_form_entries = cls.test_data["surface_entries"]
+        cls.ref_entry = cls.test_data["reference_entry"]
+        cls.pbx = cls.test_data["reference_pourbaix_diagram"]
+        cls.pH_limits = (0, 1)
+        cls.phi_limits = (0, 1)
+        cls.lg_conc_limits = (-3, -2)
+
+        # We'll use the following later for 3D surface Pourbaix diagrams
+        try:
+            getattr(cls.pbx, "stable_3D_entries"), getattr(cls.pbx, "stable_3D_vertices")
+        except AttributeError:
+            cls.pbx._stable_3D_domains, cls.pbx._stable_3D_domain_vertices = (
+                cls.pbx.get_3D_pourbaix_domains(
+                    cls.pbx._processed_entries,
+                    limits=[cls.pH_limits, cls.phi_limits, cls.lg_conc_limits],
+                )
+            )
+
+        cls.surf_pbx = SurfacePourbaixDiagram(
+            cls.surf_form_entries,
+            cls.ref_entry,
+            cls.pbx,
+            reference_surface_entry_factor=0.25,
+            process_3D=True,
+            at_equilibrium=False,
+        )
+
+    @staticmethod
+    def domain_formulae(domain) -> list[str]:
+        return [entry.composition.formula for entry in domain.entry_list]
+
+    def test_ref_elems(self):
+        # make sure it works for both specified and unspecified reference elements
+        assert set(self.surf_pbx.ref_elems) == set(["O", "La", "Mn", "H"]), (
+            "Reference elements not inferred correctly"
+        )
+
+    def test_ind_3D_surface_pbx_entries(self):
+        # Test that the surface pourbaix domains are correctly initialized
+        assert len(self.surf_pbx.ind_3D_surface_pbx_entries.values()) == 1
+
+        for domain, surface_entries in self.surf_pbx.ind_3D_surface_pbx_entries.items():
+            assert isinstance(domain, MultiEntry), "Domain is not a Pourbaix MultiEntry"
+            assert len(surface_entries) == 3, "Incorrect number of surface entries"
+
+            for entry in surface_entries:
+                assert isinstance(entry, SurfacePourbaixEntry), (
+                    "Entry is not a SurfacePourbaixEntry"
+                )
+                assert isinstance(entry.entry, ComputedEntry), "Entry is not a ComputedEntry"
+                assert isinstance(entry.reference_entries, dict), (
+                    "Reference entries are not a dictionary"
+                )
+                assert all(
+                    isinstance(ref_entry, PourbaixEntry)
+                    for ref_entry in entry.reference_entries.values()
+                ), "Reference entries are not PourbaixEntries"
+                assert len(entry.reference_entries) == 4, "Incorrect number of reference entries"
+                assert set(entry.reference_entries.keys()) == set(["La", "Mn", "O", "H"]), (
+                    "Incorrect reference elements"
+                )
+
+    def test_ind_3D_hyperplanes(self):
+        # Test that the surface pourbaix hyperplanes are correctly initialized
+        assert len(self.surf_pbx.ind_3D_surface_pbx_entries) == 1
+
+        for domain, hyperplane_info in self.surf_pbx.ind_3D_hyperplanes.items():
+            assert isinstance(domain, MultiEntry), "Domain is not a Pourbaix MultiEntry"
+            assert hyperplane_info["hyperplanes"].shape == (16, 5), (
+                "Incorrect dimensions of hyperplanes"
+            )
+            if set(TestSurfacePourbaixDiagram.domain_formulae(domain)) == set(["La1", "Mn1"]):
+                # check each row is in the list, not necessarily in order
+                for hyperplane in hyperplane_info["hyperplanes"]:
+                    assert np.any(
+                        np.allclose(hyperplane, row, rtol=1e-3, atol=1e-3)
+                        for row in [
+                            [1.0638, 3.0, 0.3546, 1.0, -10.77591],
+                            [0.97515, 3.0, 0.31028, 1.0, -11.41614],
+                            [1.07858, 4.25, 0.32505, 1.0, -12.86195],
+                            [0.0, -0.0, 1.0, 0.0, 2.0],
+                            [-0.0, -1.0, -0.0, 0.0, -0.0],
+                            [1.0, 0.0, -0.0, 0.0, -1.0],
+                            [-0.0, -0.0, 1.0, 0.0, 2.0],
+                            [-0.0, 1.0, 0.0, 0.0, -1.0],
+                            [-0.0, -1.0, -0.0, 0.0, -0.0],
+                            [-0.0, 0.0, -1.0, 0.0, -3.0],
+                            [-1.0, 0.0, -0.0, 0.0, -0.0],
+                            [-1.0, 0.0, -0.0, 0.0, -0.0],
+                            [1.0, 0.0, -0.0, 0.0, -1.0],
+                            [0.0, 1.0, -0.0, 0.0, -1.0],
+                            [-0.0, 0.0, -1.0, 0.0, -3.0],
+                            [0.0, 0.0, 0.0, -1.0, -38.50865],
+                        ]
+                    ), "Incorrect hyperplane"
+                assert hyperplane_info["interior_point"] == approx(
+                    [0.5, 0.5, -2.5, -19.25433], rel=1e-2
+                ), "Incorrect interior point"
+
+    def test_ind_3D_stable_domain_vertices(self):
+        # Test that the surface pourbaix domains are correctly initialized
+        assert len(self.surf_pbx.ind_3D_surface_pbx_entries) == 1
+
+        for domain, stable_domains in self.surf_pbx.ind_3D_stable_domain_vertices.items():
+            assert isinstance(domain, MultiEntry), "Domain is not a Pourbaix MultiEntry"
+            assert len(stable_domains) == 1, "Incorrect number of stable domains"
+            if set(TestSurfacePourbaixDiagram.domain_formulae(domain)) == set(["La1", "Mn1"]):
+                for vertices in stable_domains.values():
+                    assert np.allclose(
+                        vertices,
+                        [
+                            [-0.0, 0.0, -3.0],
+                            [-0.0, -0.0, -2.0],
+                            [1.0, -0.0, -2.0],
+                            [1.0, -0.0, -3.0],
+                            [1.0, 1.0, -3.0],
+                            [1.0, 1.0, -2.0],
+                            [0.0, 1.0, -3.0],
+                            [-0.0, 1.0, -2.0],
+                        ],
+                        rtol=1e-3,
+                        atol=1e-3,
+                    )
+
+    def test_final_stable_domain_vertices(self):
+        # Test that the final stable domain vertices are correctly initialized
+        assert len(self.surf_pbx._stable_3D_domain_vertices) == 1
+
+        # Only one domain in this case
+        for domain, vertices in self.surf_pbx._stable_3D_domain_vertices.items():
+            assert isinstance(domain, PourbaixEntry), "Domain is not a PourbaixEntry"
+            # check each row is in the list, not necessarily in order
+            for vertex in vertices:
+                assert np.any(
+                    np.allclose(vertex, row, rtol=1e-3, atol=1e-3)
+                    for row in [
+                        [0.0, 0.0, -2.0],
+                        [1.0, 0.0, -3.0],
+                        [1.0, 0.0, -2.0],
+                        [1.0, 1.0, -3.0],
+                        [1.0, 1.0, -2.0],
+                        [0.0, 1.0, -3.0],
+                        [0.0, 1.0, -2.0],
+                    ]
+                ), "Incorrect vertex"
+
+
+class Test3DEquilibriumSurfacePourbaixDiagram(TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.test_data = loadfn(f"{TEST_DIR}/surface_3d_eq_pourbaix_test_data.json")
+        cls.surf_form_entries = cls.test_data["surface_entries"]
+        cls.ref_entry = cls.test_data["reference_entry"]
+        cls.pbx = cls.test_data["reference_pourbaix_diagram"]
+        cls.pH_limits = (10, 14)
+        cls.phi_limits = (-0.5, 0.5)
+        cls.lg_conc_limits = (-8, -3)
+
+    def test_at_equilibrium_3D_pourbaix_domains(self):
+        ref_LMO_entry = [
+            entry for entry in self.pbx._processed_entries if entry.name == "LaMnO3(s)"
+        ][0]
+
+        # Get at-equilibrium 3D bulk Pourbaix domains
+        guess_interior_point = [12, 0.0, -6, -5.4894]
+        self.pbx.stable_3D_entries, self.pbx.stable_3D_vertices = self.pbx.get_3D_pourbaix_domains(
+            self.pbx._processed_entries,
+            limits=[self.pH_limits, self.phi_limits, self.lg_conc_limits],
+            at_equilibrium=True,
+            ref_pbx_entry=ref_LMO_entry,
+            interior_point=guess_interior_point,
+        )
+
+        assert len(self.pbx.stable_3D_vertices) == 8, (
+            "Number of stable 3D vertices is not correct. "
+            f"Expected 8, got {len(self.pbx.stable_3D_vertices)}"
+        )
+
+        surf_pbx = SurfacePourbaixDiagram(
+            self.surf_form_entries,
+            self.ref_entry,
+            self.pbx,
+            reference_surface_entry_factor=0.25,
+            process_3D=True,
+            at_equilibrium=True,
+            excluded_bulk_entries=[ref_LMO_entry],
+        )
+        pourbaix_domains_3D, pourbaix_domain_vertices_3D = (
+            surf_pbx._stable_3D_domains,
+            surf_pbx._stable_3D_domain_vertices,
+        )
+        assert len(pourbaix_domains_3D) == 1, (
+            "Number of stable 3D domains is not correct. "
+            f"Expected 1, got {len(pourbaix_domains_3D)}"
+        )
+        assert len(pourbaix_domain_vertices_3D) == 1, (
+            "Number of stable 3D vertices is not correct. "
+            f"Expected 1, got {len(pourbaix_domain_vertices_3D)}"
+        )
+
+
 class TestPourbaixPlotter(TestCase):
     def setUp(self):
         self.test_data = loadfn(f"{TEST_DIR}/pourbaix_test_data.json")
         self.pd = PourbaixDiagram(self.test_data["Zn"])
-        self.pbx = PourbaixDiagram(self.test_data["Zn"], filter_solids=False)
         self.plotter = PourbaixPlotter(self.pd)
 
     def test_plot_pourbaix(self):
