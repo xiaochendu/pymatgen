@@ -996,3 +996,43 @@ class TestPourbaixPlotter(TestCase):
         binary_plotter = PourbaixPlotter(pd_binary)
         ax = binary_plotter.plot_entry_stability(self.test_data["Ag-Te"][53])
         assert isinstance(ax, plt.Axes)
+
+
+class TestSurfacePourbaixPlotter(TestCase):
+    def setUp(self):
+        self.ref_structure = Structure.from_file(f"{TEST_DIR}/SrIrO3_001_2x2x4.cif")
+        self.ref_entry = ComputedStructureEntry(self.ref_structure, -133.3124)  # formation energy
+        self.test_data = loadfn(f"{TEST_DIR}/surface_pourbaix_test_data.json")
+        self.pbx = self.test_data["reference_pourbaix_diagram"]
+        self.pH_limits = [0, 4]
+        self.phi_limits = [0, 1]  # limit to 2 domains for now
+        self.pbx.stable_entries, self.pbx.stable_vertices = self.pbx.get_pourbaix_domains(
+            self.pbx.all_entries, [self.pH_limits, self.phi_limits]
+        )
+        self.test_data["surface_entries"][0].entry_id = "A_0"
+        self.surf_pbx = SurfacePourbaixDiagram(
+            self.test_data["surface_entries"],
+            self.ref_entry,
+            self.pbx,
+            reference_surface_entry_factor=1.0,
+        )
+        self.plotter = PourbaixPlotter(self.surf_pbx)
+
+    def test_plot_surface_pourbaix(self):
+        plotter = PourbaixPlotter(self.surf_pbx)
+        # Default limits
+        plotter.get_pourbaix_plot()
+        # Non-standard limits
+        plotter.get_pourbaix_plot(limits=[self.pH_limits, self.phi_limits])
+
+    def test_get_energy_vs_potential_plot(self):
+        pH = 0
+        # Test that the energy vs potential plot is generated correctly
+        ax = self.plotter.get_energy_vs_potential_plot(
+            pH,
+            energy_range=(-3, 3),
+            reference_entry_id="A_0",
+            V_range=self.phi_limits,
+            full_formula=True,
+        )
+        assert isinstance(ax, plt.Axes), "Plot is not an Axes object"
