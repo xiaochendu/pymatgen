@@ -113,6 +113,30 @@ class TestPourbaixEntry(PymatgenTest):
         assert pb_entry.get_element_fraction("Fe") == approx(0.6)
         assert pb_entry.get_element_fraction("Mn") == approx(0.4)
 
+    def test_temperature_support(self):
+        """Test basic temperature functionality."""
+        from pymatgen.analysis.pourbaix_diagram import get_prefac, TEMPERATURE_DEFAULT
+        
+        # Test default temperature
+        px_default = PourbaixEntry(self.sol_entry)
+        assert px_default.temperature == TEMPERATURE_DEFAULT
+        assert px_default.prefac == approx(get_prefac(TEMPERATURE_DEFAULT), rel=1e-6)
+        
+        # Test custom temperature
+        px_400K = PourbaixEntry(self.sol_entry, temperature=400.0)
+        assert px_400K.temperature == 400.0
+        assert px_400K.prefac == approx(get_prefac(400.0), rel=1e-6)
+        
+        # Energies at conditions should be different
+        pH, V = 7.0, 0.0
+        energy_298 = px_default.energy_at_conditions(pH, V)
+        energy_400 = px_400K.energy_at_conditions(pH, V)
+        
+        # Should differ by npH * pH * (prefac_400 - prefac_298)
+        expected_diff = px_default.npH * pH * (px_400K.prefac - px_default.prefac)
+        actual_diff = energy_400 - energy_298
+        assert actual_diff == approx(expected_diff, rel=1e-6)
+
 
 class TestOxygenPourbaixEntry(PymatgenTest):
     def setUp(self):
@@ -285,11 +309,11 @@ class TestSurfacePourbaixEntry(PymatgenTest):
         assert self.pbx_entry.nH2O == -32.0, "Wrong nH2O!"
         assert self.pbx_entry.energy == approx(54.85056, rel=1e-3), "Wrong Energy!"
 
-        # Normalized values bsaed on clean entry
-        assert self.pbx_entry.normalized_npH == -32.0, "Wrong normalized npH!"
-        assert self.pbx_entry.normalized_nPhi == 0.0, "Wrong normalized nPhi!"
-        assert self.pbx_entry.normalized_nH2O == -32.0, "Wrong normalized nH2O!"
-        assert self.pbx_entry.normalized_energy == approx(54.85056, rel=1e-3), (
+        # Normalized values based on clean entry
+        assert self.pbx_entry.normalized_npH == approx(-0.50357, rel=1e-3), "Wrong normalized npH!"
+        assert self.pbx_entry.normalized_nPhi == approx(0.0), "Wrong normalized nPhi!"
+        assert self.pbx_entry.normalized_nH2O == approx(-0.50357, rel=1e-3), "Wrong normalized nH2O!"
+        assert self.pbx_entry.normalized_energy == approx(0.86316, rel=1e-3), (
             "Wrong normalized Energy!"
         )
 

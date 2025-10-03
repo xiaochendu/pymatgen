@@ -5412,7 +5412,8 @@
             "Ir": 1e-06,
             "Sr": 1e-06
         },
-        "filter_solids": true
+        "filter_solids": true,
+        "temperature": 298.15
     },
     "reference_elements": [
         "O",

@@ -512,7 +512,8 @@
             "La": 0.001,
             "Mn": 0.001
         },
-        "filter_solids": true
+        "filter_solids": true,
+        "temperature": 298.15
     },
     "reference_entry": {
         "@module": "pymatgen.entries.computed_entries",
