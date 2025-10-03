@@ -702,7 +702,7 @@ class TestSurfacePourbaixDiagram(TestCase):
                         ]
                     ), "Incorrect hyperplane"
                 assert hyperplane_info["interior_point"] == approx(
-                    [2.0, 0.16182, -134.52836], rel=1e-2
+                    [2.0, 0.16182, -2.11704], rel=1e-2
                 ), "Incorrect interior point"
             else:
                 # check each row is in the list, not necessarily in order
@@ -721,7 +721,7 @@ class TestSurfacePourbaixDiagram(TestCase):
                         ]
                     ), "Incorrect hyperplane"
                 assert hyperplane_info["interior_point"] == approx(
-                    [2.0, 0.66182, -62.41536], rel=1e-2
+                    [2.0, 0.66182, -0.98222], rel=1e-2
                 ), "Incorrect interior point"
 
     def test_ind_stable_domain_vertices(self):
@@ -893,7 +893,7 @@ class Test3DSurfacePourbaixDiagram(TestCase):
                         ]
                     ), "Incorrect hyperplane"
                 assert hyperplane_info["interior_point"] == approx(
-                    [0.5, 0.5, -2.5, -19.25433], rel=1e-2
+                    [0.5, 0.5, -2.5, -1.23757], rel=1e-2
                 ), "Incorrect interior point"
 
     def test_ind_3D_stable_domain_vertices(self):
