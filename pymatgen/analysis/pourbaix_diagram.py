@@ -76,7 +76,28 @@ due.cite(
 
 logger = logging.getLogger(__name__)
 
-PREFAC = 0.0591
+# Temperature-dependent constants
+TEMPERATURE_DEFAULT = 298.15  # K
+KB_EV = 8.608688e-5  # Boltzmann constant in eV/K
+PREFAC_DEFAULT = 0.0591  # eV at 298.15 K for backward compatibility
+
+
+def get_prefac(temperature: float = TEMPERATURE_DEFAULT) -> float:
+    """
+    Get the temperature-dependent prefactor for Pourbaix calculations.
+    
+    The prefactor is k_B*T*ln(10) where k_B is Boltzmann constant in eV/K.
+    
+    Args:
+        temperature: Temperature in Kelvin. Defaults to 298.15 K.
+        
+    Returns:
+        Temperature-dependent prefactor in eV.
+    """
+    return KB_EV * temperature * np.log(10)
+
+
+PREFAC = PREFAC_DEFAULT  # Maintain backward compatibility
 ELEMENTS_HO = {Element("H"), Element("O")}
 SYMBOLS_HO = {elt.symbol for elt in ELEMENTS_HO}
 
@@ -98,15 +119,18 @@ class PourbaixEntry(MSONable, Stringify):
     work. This may be changed to be more flexible in the future.
     """
 
-    def __init__(self, entry, entry_id=None, concentration=1e-6):
+    def __init__(self, entry, entry_id=None, concentration=1e-6, temperature=TEMPERATURE_DEFAULT):
         """
         Args:
             entry (ComputedEntry/ComputedStructureEntry/PDEntry/IonEntry): An
                 entry object
-            entry_id ():
-            concentration ():
+            entry_id (): Entry identifier
+            concentration (): Ion concentration for aqueous species
+            temperature (float): Temperature in Kelvin. Defaults to 298.15 K.
         """
         self.entry = entry
+        self.temperature = temperature
+        self._prefac = get_prefac(temperature)
         if isinstance(entry, IonEntry):
             self.concentration = concentration
             self.phase_type = "Ion"
@@ -122,6 +146,11 @@ class PourbaixEntry(MSONable, Stringify):
             self.entry_id = entry.entry_id
         else:
             self.entry_id = None
+
+    @property
+    def prefac(self):
+        """Temperature-dependent prefactor."""
+        return self._prefac
 
     @property
     def npH(self):
@@ -203,7 +232,7 @@ class PourbaixEntry(MSONable, Stringify):
         Returns:
             free energy at conditions
         """
-        return self.energy + self.npH * PREFAC * pH + self.nPhi * V
+        return self.energy + self.npH * self.prefac * pH + self.nPhi * V
 
     def get_element_fraction(self, element):
         """Get the elemental fraction of a given non-OH element.
@@ -235,7 +264,7 @@ class PourbaixEntry(MSONable, Stringify):
         """The concentration contribution to the free energy. Should only be present
         when there are ions in the entry.
         """
-        return PREFAC * np.log10(self.concentration)
+        return self.prefac * np.log10(self.concentration)
 
     # TODO: not sure if these are strictly necessary with refactor
     def as_dict(self):
@@ -250,6 +279,7 @@ class PourbaixEntry(MSONable, Stringify):
             dct["entry_type"] = "Solid"
         dct["entry"] = self.entry.as_dict()
         dct["concentration"] = self.concentration
+        dct["temperature"] = self.temperature
         dct["entry_id"] = self.entry_id
         return dct
 
@@ -264,7 +294,8 @@ class PourbaixEntry(MSONable, Stringify):
         )
         entry_id = dct["entry_id"]
         concentration = dct["concentration"]
-        return cls(entry, entry_id, concentration)
+        temperature = dct.get("temperature", TEMPERATURE_DEFAULT)
+        return cls(entry, entry_id, concentration, temperature)
 
     @property
     def normalization_factor(self):
@@ -312,8 +343,9 @@ class OxygenPourbaixEntry(PourbaixEntry):
         entry: ComputedEntry,
         entry_id: Optional[str] = None,
         concentration: float = 1.0,
+        temperature: float = TEMPERATURE_DEFAULT,
     ):
-        super().__init__(entry, entry_id, concentration)
+        super().__init__(entry, entry_id, concentration, temperature)
         self.phase_type = "Liquid"
 
     @property
@@ -346,6 +378,7 @@ class OxygenPourbaixEntry(PourbaixEntry):
         dct["entry"] = self.entry.as_dict()
         dct["concentration"] = self.concentration
         dct["entry_id"] = self.entry_id
+        dct["temperature"] = self.temperature
         return dct
 
     def to_pretty_string(self) -> str:
@@ -363,8 +396,9 @@ class HydrogenPourbaixEntry(PourbaixEntry):
         entry: ComputedEntry,
         entry_id: str | None = None,
         concentration: float = 1.0,
+        temperature: float = TEMPERATURE_DEFAULT,
     ):
-        super().__init__(entry, entry_id, concentration)
+        super().__init__(entry, entry_id, concentration, temperature)
         self.phase_type = "Ion"  # concentration is the same as pH, so we neglect it
 
     @property
@@ -418,6 +452,7 @@ class SurfacePourbaixEntry(PourbaixEntry):
         clean_entry_factor: float = 1.0,
         entry_id: Optional[float] = None,
         concentration: float = 1e-6,
+        temperature: float = TEMPERATURE_DEFAULT,
         label: Optional[str] = None,
         marker: Optional[str] = None,
         color: Optional[str] = None,
@@ -435,7 +470,7 @@ class SurfacePourbaixEntry(PourbaixEntry):
             marker (str): Marker for plotting
             color (str): Color for plotting
         """
-        super().__init__(surface_entry, entry_id, concentration)
+        super().__init__(surface_entry, entry_id, concentration, temperature)
         self.surface_entry = surface_entry  # energy must be formation energy
         self.reference_entries = reference_entries
         if not all(isinstance(entry, PourbaixEntry) for entry in self.reference_entries.values()):
@@ -624,6 +659,20 @@ class MultiEntry(PourbaixEntry):
         self.weights = weights or [1.0] * len(entry_list)
         self.entry_list = entry_list
 
+        # Initialize temperature and prefac from first entry after checking consistency
+        if not all(
+            np.isclose(entry.temperature, entry_list[0].temperature, atol=1e-3) for entry in entry_list
+        ):
+            warnings.warn(
+                "Entries have different temperatures, using temperature of first entry for MultiEntry."
+            )
+        if not all(np.isclose(entry.prefac, entry_list[0].prefac, atol=1e-3) for entry in entry_list):
+            warnings.warn(
+                "Entries have different prefacs, using prefac of first entry for MultiEntry."
+            )
+        self.temperature = entry_list[0].temperature
+        self._prefac = entry_list[0].prefac
+
     def __getattr__(self, attr):
         """
         Because most of the attributes here are just weighted averages of the entry_list,
@@ -804,6 +853,7 @@ class PourbaixDiagram(MSONable):
         phi_limits: tuple[float, float] = (-2, 2),
         lg_conc_limits: tuple[float, float] = (-12, -2),
         process_3D: bool = False,
+        temperature: float | None = None,
     ):
         """
         Args:
@@ -828,8 +878,11 @@ class PourbaixDiagram(MSONable):
             phi_limits (tuple): Potential limits for Pourbaix diagram. Defaults to (-2, 2).
             lg_conc_limits (tuple): Log concentration limits for 3D Pourbaix diagram. Defaults to (-12, -2).
             process_3D (bool): Whether to process the Pourbaix diagram in 3D. Defaults to False.
+            temperature (float): Temperature in Kelvin. If None, will be inferred from entries.
+                If specified, all entries must have consistent temperatures within 1e-3 K.
         """
         entries = deepcopy(entries)
+         
         self.filter_solids = filter_solids
 
         # Get non-OH elements
@@ -904,18 +957,67 @@ class PourbaixDiagram(MSONable):
                 self._processed_entries = self._filtered_entries
                 self._multi_element = False
 
+        # Infer temperature from entries if not specified
+        if temperature is None:
+            entry_temperatures = []
+            for entry in entries:
+                if hasattr(entry, 'temperature'):
+                    entry_temperatures.append(entry.temperature)
+                    
+            if entry_temperatures:
+                # Check that all temperatures are consistent
+                unique_temps = list(set(entry_temperatures))
+                if len(unique_temps) > 1:
+                    temp_diffs = [abs(t - unique_temps[0]) for t in unique_temps[1:]]
+                    if any(diff > 1e-3 for diff in temp_diffs):
+                        raise ValueError(
+                            f"Inconsistent temperatures found in entries: {unique_temps}. "
+                            "All entries must have the same temperature within 1e-3 K."
+                        )
+                temperature = unique_temps[0]
+                logger.info(f"Inferred temperature from entries: {temperature:.2f} K")
+            else:
+                temperature = TEMPERATURE_DEFAULT
+                logger.info(f"No temperature found in entries, using default: {temperature:.2f} K")
+        
+        self.temperature = temperature
+        self._prefac = get_prefac(temperature)
+        
+        # Validate that all entries have consistent temperature with the diagram temperature
+        for entry in entries:
+            if hasattr(entry, 'temperature') and abs(entry.temperature - temperature) > 1e-3:
+                raise ValueError(
+                    f"Entry {entry} has temperature {entry.temperature} K, "
+                    f"but diagram temperature is {temperature} K. "
+                    "All entries must have consistent temperatures within 1e-3 K."
+                )
+            elif hasattr(entry, 'entry_list'):  # MultiEntry case
+                for sub_entry in entry.entry_list:
+                    if hasattr(sub_entry, 'temperature') and abs(sub_entry.temperature - temperature) > 1e-3:
+                        raise ValueError(
+                            f"Sub-entry {sub_entry} in MultiEntry has temperature {sub_entry.temperature} K, "
+                            f"but diagram temperature is {temperature} K. "
+                            "All entries must have consistent temperatures within 1e-3 K."
+                        )
+
         # Sort entries by name
         self._processed_entries = sorted(self._processed_entries, key=lambda x: x.name)
 
         self._stable_domains, self._stable_domain_vertices = self.get_pourbaix_domains(
-            self._processed_entries, limits=[pH_limits, phi_limits]
+            self._processed_entries, limits=[pH_limits, phi_limits], temperature=temperature
         )
 
         if process_3D:
             self._stable_3D_domains, self._stable_3D_domain_vertices = self.get_3D_pourbaix_domains(
                 self._processed_entries,
                 limits=[pH_limits, phi_limits, lg_conc_limits],
+                temperature=temperature,
             )
+
+    @property
+    def prefac(self):
+        """Temperature-dependent prefactor for the diagram."""
+        return self._prefac
 
     def _convert_entries_to_points(self, pourbaix_entries):
         """
@@ -1139,7 +1241,7 @@ class PourbaixDiagram(MSONable):
             return None
 
     @staticmethod
-    def get_pourbaix_domains(pourbaix_entries, limits=None):
+    def get_pourbaix_domains(pourbaix_entries, limits=None, temperature=TEMPERATURE_DEFAULT):
         """Get a set of Pourbaix stable domains (i. e. polygons) in
         pH-V space from a list of pourbaix_entries.
 
@@ -1165,13 +1267,15 @@ class PourbaixDiagram(MSONable):
         """
         # Sort entries by name
         pourbaix_entries = sorted(pourbaix_entries, key=lambda x: x.name)
+        
+        prefac = get_prefac(temperature)
 
         if limits is None:
             limits = [[-2, 16], [-4, 4]]
 
         # Get hyperplanes
         hyperplanes = [
-            np.array([-PREFAC * entry.npH, -entry.nPhi, 0, -entry.energy])
+            np.array([-prefac * entry.npH, -entry.nPhi, 0, -entry.energy])
             * entry.normalization_factor
             for entry in pourbaix_entries
         ]
@@ -1231,6 +1335,7 @@ class PourbaixDiagram(MSONable):
         at_equilibrium: bool = False,
         ref_pbx_entry: PourbaixEntry | None = None,
         interior_point: list[float] | None = None,
+        temperature: float = TEMPERATURE_DEFAULT,
     ) -> dict[PourbaixEntry, list[list[float]]]:
         """Get a set of Pourbaix stable domains (i. e. polygons) in
         pH-V-conc space from a list of pourbaix_entries.
@@ -1245,7 +1350,7 @@ class PourbaixDiagram(MSONable):
         points.
 
         New energy_at_conditions(pH, V, conc) should be
-        self.energy_without_conc + self.npH * PREFAC * pH + self.nPhi * V + PREFAC * np.log10(conc).
+        self.energy_without_conc + self.npH * prefac * pH + self.nPhi * V + prefac * np.log10(conc).
 
         If at_equilibrium is True, the function will add an additional hyperplane corresponding to the
         equilibrium condition of the reference entry. The ref_pbx_entry is assumed to be already in the
@@ -1273,6 +1378,8 @@ class PourbaixDiagram(MSONable):
 
         # Sort entries by name
         pourbaix_entries = sorted(pourbaix_entries, key=lambda x: x.name)
+        
+        prefac = get_prefac(temperature)
 
         # Limits correspond to pH, V, and log(conc)
         # log10(conc) in practice should be -5 or lower
@@ -1283,9 +1390,9 @@ class PourbaixDiagram(MSONable):
         hyperplanes = [
             np.array(
                 [
-                    -PREFAC * entry.npH,
+                    -prefac * entry.npH,
                     -entry.nPhi,
-                    -PREFAC * entry.n_conc,
+                    -prefac * entry.n_conc,
                     0,
                     -entry.energy_without_conc_term,
                 ]
@@ -1304,9 +1411,9 @@ class PourbaixDiagram(MSONable):
             ref_pbx_hyperplane = (
                 -np.array(
                     [
-                        -PREFAC * ref_pbx_entry.npH,
+                        -prefac * ref_pbx_entry.npH,
                         -ref_pbx_entry.nPhi,
-                        -PREFAC * ref_pbx_entry.n_conc,
+                        -prefac * ref_pbx_entry.n_conc,
                         0,
                         -(
                             ref_pbx_entry.energy_without_conc_term
@@ -1537,6 +1644,7 @@ class PourbaixDiagram(MSONable):
             "comp_dict": self._elt_comp,
             "conc_dict": self._conc_dict,
             "filter_solids": self.filter_solids,
+            "temperature": self.temperature,
         }
 
     @classmethod
@@ -1549,11 +1657,14 @@ class PourbaixDiagram(MSONable):
             PourbaixDiagram
         """
         decoded_entries = MontyDecoder().process_decoded(dct["entries"])
+        # If temperature is not in dict, let the constructor infer it from entries
+        temperature = dct.get("temperature")  # Will be None if not present
         return cls(
             decoded_entries,
             comp_dict=dct.get("comp_dict"),
             conc_dict=dct.get("conc_dict"),
             filter_solids=bool(dct.get("filter_solids")),
+            temperature=temperature,
         )
 
 
@@ -1584,12 +1695,18 @@ class SurfacePourbaixDiagram(MSONable):
             reference_elements: elements to be considered as reference in the surface Pourbaix diagram
             excluded_bulk_entries: list of bulk Pourbaix domains to exclude from the surface Pourbaix diagram
             process_3D: whether to process the 3D Pourbaix diagram
+            at_equilibrium: whether to calculate the surface Pourbaix diagram at equilibrium
         """
         self.surface_entries = surface_entries  # with surface formation energies
         self.reference_surface_entry = reference_surface_entry
         self.reference_surface_entry_factor = reference_surface_entry_factor
         self.ref_pbx = reference_pourbaix_diagram
         self.ref_elems = reference_elements or self.get_ref_elems()
+        
+        # Inherit temperature from the reference Pourbaix diagram
+        self.temperature = self.ref_pbx.temperature
+        self.prefac = self.ref_pbx.prefac or get_prefac(self.temperature)
+        logger.info(f"Surface Pourbaix diagram using temperature from reference diagram: {self.temperature:.2f} K")
 
         # Create 3D Pourbaix diagram in pH-V-log(conc) space
         if process_3D:
@@ -1827,7 +1944,7 @@ class SurfacePourbaixDiagram(MSONable):
         pourbaix_entries = self.ind_surface_pbx_entries.get(domain)
         hyperplanes = np.array(
             [
-                np.array([-PREFAC * entry.npH, -entry.nPhi, 0, -entry.energy])
+                np.array([-entry.prefac * entry.npH, -entry.nPhi, 0, -entry.energy])
                 * entry.normalization_factor
                 for entry in pourbaix_entries
             ]
@@ -1858,9 +1975,9 @@ class SurfacePourbaixDiagram(MSONable):
             [
                 np.array(
                     [
-                        -PREFAC * entry.npH,
+                        -entry.prefac * entry.npH,
                         -entry.nPhi,
-                        -PREFAC * entry.n_conc,
+                        -entry.prefac * entry.n_conc,
                         0,
                         -entry.energy_without_conc_term,
                     ]
@@ -2325,11 +2442,12 @@ class PourbaixPlotter:
             cmap = plt.get_cmap(cmap)
 
         if show_water_lines:
-            h_line = np.transpose([[xlim[0], -xlim[0] * PREFAC], [xlim[1], -xlim[1] * PREFAC]])
+            prefac = self._pbx.prefac
+            h_line = np.transpose([[xlim[0], -xlim[0] * prefac], [xlim[1], -xlim[1] * prefac]])
             o_line = np.transpose(
                 [
-                    [xlim[0], -xlim[0] * PREFAC + 1.23],
-                    [xlim[1], -xlim[1] * PREFAC + 1.23],
+                    [xlim[0], -xlim[0] * prefac + 1.23],
+                    [xlim[1], -xlim[1] * prefac + 1.23],
                 ]
             )
             ax.plot(h_line[0], h_line[1], "r--", linewidth=lw)
