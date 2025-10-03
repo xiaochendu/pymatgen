@@ -605,8 +605,8 @@ class SurfacePourbaixEntry(PourbaixEntry):
 
     @property
     def normalization_factor(self):
-        """Using unit primitive area as normalization factor."""
-        return 1.0 / self.get_unit_primitive_area
+        """Using surface area as normalization factor."""
+        return 1.0 / self.surface_area(self.entry)
 
 
 class MultiEntry(PourbaixEntry):
@@ -2513,7 +2513,10 @@ class PourbaixPlotter:
             if not isinstance(entry, PourbaixEntry):
                 entry = PourbaixEntry(entry)
             if highlight_subset_entries and entry.entry_id not in subset_entry_ids:
-                ax.plot(all_Vs, energies, color="gray", linewidth=lw / 2, alpha=0.2)
+                # Plot rasterized line for non-subset entries
+                ax.plot(
+                    all_Vs, energies, color="gray", linewidth=lw / 2, alpha=0.2, rasterized=True
+                )
             else:
                 if cmap_values is not None:
                     cmap_value = cmap_values[entry.entry_id]
@@ -2623,7 +2626,7 @@ class PourbaixPlotter:
         if energy_range:
             ax.set_ylim(energy_range)
         # ax.set_title(r"$\Delta$ Energy vs Potential at pH " + f"{pH}", fontsize=20, fontweight="bold")
-        ax.set(xlabel=r"$U_{SHE}$ (V)", ylabel=r"$\Delta\Omega$ (eV/unit surface)")
+        ax.set(xlabel=r"$U_{SHE}$ (V)", ylabel=r"$\Delta\Omega$ (eV/$\AA^2$)")
         return ax
 
     def domain_vertices(self, entry):
