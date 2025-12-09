@@ -13,17 +13,8 @@ from collections import defaultdict
 from copy import deepcopy
 from functools import cmp_to_key, partial
 from multiprocessing import Pool
-from typing import (
-    TYPE_CHECKING,
-    Dict,
-    Iterable,
-    List,
-    Literal,
-    Optional,
-    Tuple,
-    Union,
-    no_type_check,
-)
+from typing import (TYPE_CHECKING, Dict, Iterable, List, Literal, Optional,
+                    Tuple, Union, no_type_check)
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -38,7 +29,8 @@ from pymatgen.analysis.reaction_calculator import Reaction, ReactionError
 from pymatgen.core import Composition, Element
 from pymatgen.core.ion import Ion
 from pymatgen.entries.compatibility import MU_H2O
-from pymatgen.entries.computed_entries import ComputedEntry, ComputedStructureEntry
+from pymatgen.entries.computed_entries import (ComputedEntry,
+                                               ComputedStructureEntry)
 from pymatgen.util.coord import Simplex
 from pymatgen.util.due import Doi, due
 from pymatgen.util.plotting import pretty_plot
@@ -1782,7 +1774,7 @@ class SurfacePourbaixDiagram(MSONable):
         Returns:
             Pourbaix entry for H2O.
         """
-        return OxygenPourbaixEntry(ComputedEntry("H8O4", -9.83319943))
+        return OxygenPourbaixEntry(ComputedEntry("H8O4", -9.83319943), temperature=self.temperature)
 
     @property
     def H_ion_pourbaix_entry(self) -> IonEntry:
@@ -1791,7 +1783,7 @@ class SurfacePourbaixDiagram(MSONable):
         Returns:
             Pourbaix entry for H+.
         """
-        return HydrogenPourbaixEntry(IonEntry(Ion.from_formula("H[1+]"), 0.0))
+        return HydrogenPourbaixEntry(IonEntry(Ion.from_formula("H[1+]"), 0.0), temperature=self.temperature)
 
     @property
     def stable_entries(self) -> list[PourbaixEntry]:
@@ -1906,6 +1898,7 @@ class SurfacePourbaixDiagram(MSONable):
                 clean_entry=self.reference_surface_entry,
                 clean_entry_factor=self.reference_surface_entry_factor,
                 entry_id=surf_entry.entry_id,
+                temperature=self.temperature,
             )
             for surf_entry in self.surface_entries
         ]
@@ -2237,7 +2230,7 @@ class SurfacePourbaixDiagram(MSONable):
         merged_pbx_stable_domains = {}
         merged_pbx_stable_domain_vertices = {}
         for k, v_simplex in merged_stable_domains.items():
-            pbx_entry = PourbaixEntry(k)
+            pbx_entry = PourbaixEntry(k, temperature=self.temperature)
             # merged_stable_domains[k] = list(set(v_simplex))
             merged_pbx_stable_domains[pbx_entry] = list(set(v_simplex))
             v_vertices = merged_stable_domain_vertices[k]
